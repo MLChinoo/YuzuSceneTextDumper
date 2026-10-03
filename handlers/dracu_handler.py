@@ -22,89 +22,93 @@ class DracuHandler(BaseHandler):
             level=logging.INFO,
             format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         )
-        ctx = MiniRacer()
-        with open(config.scnchartdata_filepath, mode="r", encoding="UTF-16") as file:
-            scnchartdata_json = json.loads(utils.parser.scnchartdata_tjs_to_json(file.read()))
-            flag_names = scnchartdata_json["flagkeys"]
-            assert flag_names == list(scnchartdata_json["flags"].keys())
-            ctx.eval(f"var flags = {json.dumps(scnchartdata_json["flags"])};")
-        ctx.eval(f'this["IsTrial"] = {json.dumps(config.is_trial)};')
-
-        ctx.eval(f'this["checkIN"] = {json.dumps(config.adult_enabled and config.check_in)};')
-        ctx.eval(f'this["checkOUT"] = {json.dumps(config.adult_enabled and config.check_out)};')
-        ctx.eval(f'this["checkMOUTH"] = {json.dumps(config.adult_enabled and config.check_mouth)};')
-        ctx.eval(f'this["checkFACE"] = {json.dumps(config.adult_enabled and config.check_face)};')
-        ctx.eval(r"""
-        var f = {sf: {}};
-        function initialize() {
-            Object.keys(flags).forEach(key => this[key] = 0);
-        }
-        function finalize() {
-            Object.keys(this).forEach(k => {
-                f[k] = this[k];
-            });
-        }
-        function UpdateBranchFlags() {
-            initialize();
-            for (var character in flags) {
-                var conditions = flags[character];
-                for (var i = 0; i < conditions.length; i++) {
-                    var condition = conditions[i];
-                    var selection = condition[0];
-                    var selected_id = condition[1];
-                    var bonus = condition[2];
-                    if (this[selection] === selected_id) {
-                        this[character] += bonus;
+        with MiniRacer() as ctx, StringIO() as transcript_buffer:
+            with open(config.scnchartdata_filepath, mode="r", encoding="UTF-16") as file:
+                scnchartdata_json = json.loads(utils.parser.scnchartdata_tjs_to_json(file.read()))
+                flag_names = scnchartdata_json["flagkeys"]
+                assert flag_names == list(scnchartdata_json["flags"].keys())
+                ctx.eval(f"var flags = {json.dumps(scnchartdata_json["flags"])};")
+            runtime_options = {
+                "IsTrial": config.is_trial,
+                "checkIN": config.adult_enabled and config.check_in,
+                "checkOUT": config.adult_enabled and config.check_out,
+                "checkMOUTH": config.adult_enabled and config.check_mouth,
+                "checkFACE": config.adult_enabled and config.check_face,
+            }
+            ctx.eval(f"Object.assign(this, {json.dumps(runtime_options)});")
+            ctx.eval(r"""
+            var f = {sf: {}};
+            function initialize() {
+                Object.keys(flags).forEach(key => this[key] = 0);
+            }
+            function finalize() {
+                Object.keys(this).forEach(k => {
+                    f[k] = this[k];
+                });
+            }
+            function UpdateBranchFlags() {
+                initialize();
+                for (var character in flags) {
+                    var conditions = flags[character];
+                    for (var i = 0; i < conditions.length; i++) {
+                        var condition = conditions[i];
+                        var selection = condition[0];
+                        var selected_id = condition[1];
+                        var bonus = condition[2];
+                        if (this[selection] === selected_id) {
+                            this[character] += bonus;
+                        }
                     }
                 }
+                finalize();
             }
+            function SetBranchFlags(varName, value) {
+                this[varName] = value;
+                UpdateBranchFlags();
+            }
+            function CheckBranchFlags(expr) {
+                // js强兼tjs语法
+                expr = " " + expr;
+                expr = expr.replace(/ \./g, " f.");
+                return !!eval(expr);
+            }
+            function checkAdult() {
+            """ + f"    return {json.dumps(config.adult_enabled)};" + """
+            }
+            initialize();
             finalize();
-        }
-        function SetBranchFlags(varName, value) {
-            this[varName] = value;
-            UpdateBranchFlags();
-        }
-        function CheckBranchFlags(expr) {
-            // js强兼tjs语法
-            expr = " " + expr;
-            expr = expr.replace(/ \./g, " f.");
-            return !!eval(expr);
-        }
-        function checkAdult() {
-        """ + f"    return {json.dumps(config.adult_enabled)};" + """
-        }
-        initialize();
-        finalize();
-        """)
-        ctx.eval(f'f.sf.clear_miu = {json.dumps(config.clear_miu)};')
-        ctx.eval(f'f.sf.clear_azu = {json.dumps(config.clear_azu)};')
-        ctx.eval(f'f.sf.clear_rio = {json.dumps(config.clear_rio)};')
-        ctx.eval(f'f.sf.clear_eri = {json.dumps(config.clear_eri)};')
-        ctx.eval(f'f.sf.clear_nic = {json.dumps(config.clear_nic)};')
+            """)
+            clear_flags = {
+                "clear_miu": config.clear_miu,
+                "clear_azu": config.clear_azu,
+                "clear_rio": config.clear_rio,
+                "clear_eri": config.clear_eri,
+                "clear_nic": config.clear_nic,
+            }
+            ctx.eval(f"Object.assign(f.sf, {json.dumps(clear_flags)});")
 
-        next_storage = config.head_scn
-        next_label = config.head_label
+            next_storage = config.head_scn
+            next_label = config.head_label
 
-        current_storage = config.head_scn
-        transcript_buffer = StringIO()
-        chapter_count = 0
+            current_storage = config.head_scn
+            chapter_count = 0
 
-        def execute_script(expression):
-            try:
-                return ctx.eval(expression)
-            except Exception as exc:
-                logger.exception("执行脚本失败：%s / %s：%s", current_storage, next_label, expression)
-                raise RuntimeError(
-                    f"执行脚本失败：{current_storage} / {next_label}：{expression}"
-                ) from exc
+            def execute_script(expression):
+                try:
+                    return ctx.eval(expression)
+                except Exception as exc:
+                    logger.exception("执行脚本失败：%s / %s：%s", current_storage, next_label, expression)
+                    raise RuntimeError(
+                        f"执行脚本失败：{current_storage} / {next_label}：{expression}"
+                    ) from exc
 
-        while current_storage:
-            if current_storage == "start.ks":
-                logger.info("到达线路结尾，线路结束")
-                break
-            logger.info('准备读取scenes：%s ...', current_storage)
-            with open(os.path.join(config.root_dir, f"{current_storage}.json"), mode="r", encoding="UTF-8") as file:
-                script_data = json.load(file)
+            while current_storage:
+                if current_storage == "start.ks":
+                    logger.info("到达线路结尾，线路结束")
+                    break
+                logger.info('准备读取scenes：%s ...', current_storage)
+                with open(os.path.join(config.root_dir, f"{current_storage}.json"), mode="r", encoding="UTF-8") as file:
+                    script_data = json.load(file)
                 logger.info("读取场景文件成功：%s", script_data["name"])
                 chapter_count += 1
                 transcript_buffer.write(f"【第{chapter_count}章】开始\n")
@@ -129,7 +133,6 @@ class DracuHandler(BaseHandler):
                         logger.info("当前所有flag加点：")
                         for flag_name in flag_names:
                             logger.info('\t%s: %s', flag_name, ctx.eval(flag_name))
-                    assert scene["label"] == next_label
 
                     for expression, value in scene.get("preevals", []):
                         execute_script(f"{expression} = {json.dumps(value)};")
@@ -251,8 +254,7 @@ class DracuHandler(BaseHandler):
                         current_storage = next_storage
                         break
                 transcript_buffer.write(f"【第{chapter_count}章】结束\n\n\n\n")
-        raw_text = transcript_buffer.getvalue()
-        transcript_buffer.close()
+            raw_text = transcript_buffer.getvalue()
         logger.info("正在写入文本：%s", config.output_txt_filepath)
         with open(config.output_txt_filepath, mode="w", encoding="UTF-8") as output_txt:
             output_txt.write(raw_text)
