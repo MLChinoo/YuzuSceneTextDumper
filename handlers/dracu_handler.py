@@ -1,6 +1,5 @@
 import json
 import os
-import traceback
 import utils.parser
 
 from py_mini_racer import MiniRacer
@@ -80,6 +79,15 @@ class DracuHandler(BaseHandler):
         current_scn = config.head_scn
         output_txt = open(config.output_txt_filepath, mode="w+", encoding="UTF-8")
         chapter_count = 0
+
+        def execute_script(expression):
+            try:
+                return ctx.eval(expression)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"执行脚本失败：{current_scn} / {target}：{expression}"
+                ) from exc
+
         while current_scn:
             print()
             if current_scn == "start.ks":
@@ -96,16 +104,17 @@ class DracuHandler(BaseHandler):
                 # input("[DEBUG]回车继续")
                 assert storage == loaded_json["name"]
                 print("————————————————————")
-                scenes_map = {}
-                min_first_line = 2147483647
-                for scene_cached in loaded_json["scenes"]:
-                    scenes_map[scene_cached["label"]] = scene_cached
-                    min_first_line = current_first_line if (current_first_line := int(scene_cached["firstLine"])) < min_first_line else min_first_line
-                if target is None:
-                    for scene in scenes_map.values():
-                        if scene["firstLine"] == min_first_line:
-                            target = scene["label"]
+                scenes_map = {
+                    scene["label"]: scene
+                    for scene in loaded_json["scenes"]
+                }
                 while True:
+                    if target is None:
+                        first_scene = min(
+                            scenes_map.values(),
+                            key=lambda scene: int(scene["firstLine"]),
+                        )
+                        target = first_scene["label"]
                     scene = scenes_map[target]
                     print("当前scene：")
                     print(f"\tfirstLine: {scene["firstLine"]}")
@@ -120,22 +129,21 @@ class DracuHandler(BaseHandler):
                     assert scene["label"] == target
 
                     for expression, value in scene.get("preevals", []):
-                        ctx.eval(f"{expression} = {json.dumps(value)};")
+                        execute_script(f"{expression} = {json.dumps(value)};")
 
                     if "selects" in scene.keys():  # 当前scene含有选择块
                         print(f"模式：select")
-                        selects_map = {}
-                        for select_cached in scene["selects"]:
-                            selects_map[int(select_cached["selidx"])] = select_cached
-                        valid_indexes = list(selects_map.keys())
-                        valid_indexes.sort()
-                        valid_indexes = list(str(_) for _ in valid_indexes)
-                        for index in valid_indexes.copy():
-                            select = selects_map[index := int(index)]
-                            if "eval" in select.keys() and not ctx.eval(select["eval"]):
-                                valid_indexes.remove(str(index))
+                        selects_map = {
+                            int(select["selidx"]): select
+                            for select in scene["selects"]
+                        }
+                        valid_indexes = []
+                        for index in sorted(selects_map):
+                            select = selects_map[index]
+                            if "eval" in select and not ctx.eval(select["eval"]):
                                 print(f"(X) 第{index}个选项【eval不成立，无法选择】：")
                             else:
+                                valid_indexes.append(str(index))
                                 print(f"({index}) 第{index}个选项：")
                             print(f"\t[日文]{select["text"]}")
                             for index_lang, lang in enumerate(("英文", "简中", "繁中"), start=1):
@@ -148,21 +156,12 @@ class DracuHandler(BaseHandler):
                             print(f"\ttarget: {select["target"]}")
                             if "icon" in select.keys():
                                 print(f"\ticon: {select["icon"]}")
-                        selected_id = "0d000721"
-                        while selected_id not in valid_indexes :
+                        if not valid_indexes:
+                            raise RuntimeError("当前场景没有可用选项")
+                        selected_id = None
+                        while selected_id not in valid_indexes:
                             selected_id = input("输入选项序号，按回车键确定：")
-                        selected = scene["selects"][int(selected_id)]
-                        try:
-                            rtn = ctx.eval(selected["exp"])
-                            print(f"执行exp成功，返回值：{rtn}")
-                        except Exception:
-                            print(f"执行exp失败，异常：")
-                            traceback.print_exc()
-                            print("可能影响后续路线走向！！")
-                        finally:
-                            print()
-                            storage = selected["storage"]
-                            target = selected["target"]
+                        selected_next = selects_map[int(selected_id)]
 
                     elif "nexts" in scene.keys():  # 当前scene含有文本块
                         if "texts" in scene.keys():
@@ -230,13 +229,8 @@ class DracuHandler(BaseHandler):
                         for next_eval in nexts_eval:
                             print(f"有条件判断eval：{next_eval["eval"]}\t", end="")
                             if ctx.eval(next_eval["eval"]):
-                                if next_eval.get("exp"):
-                                    ctx.eval(next_eval["exp"])
-                                storage = next_eval["storage"]
-                                target = next_eval["target"]
+                                selected_next = next_eval
                                 print("成立√")
-                                print(f"\tstorage: {storage}")
-                                print(f"\ttarget: {target}")
                                 break
                             else:
                                 print("不成立×")
@@ -245,19 +239,17 @@ class DracuHandler(BaseHandler):
                                 print("没有可用的下一场景，线路结束")
                                 current_scn = None
                                 break
-                            if nexts_non_eval[0].get("exp"):
-                                ctx.eval(nexts_non_eval[0]["exp"])
-                            storage = nexts_non_eval[0]["storage"]
-                            if "target" in nexts_non_eval[0].keys():
-                                target = nexts_non_eval[0]["target"]
-                            else:
-                                target = None
+                            selected_next = nexts_non_eval[0]
                             print("无条件判断：")
-                            print(f"\tstorage: {storage}")
-                            print(f"\ttarget: {target}")
 
                     else:
                         raise RuntimeError("?")
+
+                    if selected_next.get("exp"):
+                        rtn = execute_script(selected_next["exp"])
+                        print(f"执行exp成功，返回值：{rtn}")
+                    storage = selected_next["storage"]
+                    target = selected_next.get("target")
 
                     assert storage is not None
                     print()
