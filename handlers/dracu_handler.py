@@ -137,34 +137,29 @@ class DracuHandler(BaseHandler):
                     if "selects" in scene:  # 当前scene含有选择块
                         logger.debug('模式：select')
                         choices_by_id = {
-                            int(select["selidx"]): select
-                            for select in scene["selects"]
+                            int(choice["selidx"]): choice
+                            for choice in scene["selects"]
                         }
-                        available_choice_ids = []
-                        for index in sorted(choices_by_id):
-                            select = choices_by_id[index]
-                            if "eval" in select and not ctx.eval(select["eval"]):
-                                logger.info('(X) 第%s个选项【eval不成立，无法选择】：', index)
+                        available_choices = {}
+                        for choice_id in sorted(choices_by_id):
+                            choice = choices_by_id[choice_id]
+                            if "eval" in choice and not ctx.eval(choice["eval"]):
+                                logger.info('(X) 第%s个选项【eval不成立，无法选择】：', choice_id)
                             else:
-                                available_choice_ids.append(str(index))
-                                logger.info('(%s) 第%s个选项：', index, index)
-                            logger.info('\t[日文]%s', select["text"])
-                            for index_lang, lang in enumerate(("英文", "简中", "繁中"), start=1):
-                                logger.info('\t[%s]%s', lang, select["language"][index_lang]["text"])
-                            logger.debug('\ttag: %s', select["tag"])
-                            if "eval" in select:
-                                logger.debug('\teval: %s', select["eval"])
-                            logger.debug('\texp: %s', select["exp"])
-                            logger.debug('\tstorage: %s', select["storage"])
-                            logger.debug('\ttarget: %s', select["target"])
-                            if "icon" in select:
-                                logger.debug('\ticon: %s', select["icon"])
-                        if not available_choice_ids:
+                                available_choices[str(choice_id)] = choice
+                                logger.info('(%s) 第%s个选项：', choice_id, choice_id)
+                            logger.info('\t[日文]%s', choice["text"])
+                            for language_name, translation in zip(("英文", "简中", "繁中"), choice["language"][1:]):
+                                logger.info('\t[%s]%s', language_name, translation["text"])
+                            for field, value in choice.items():
+                                if field not in {"selidx", "text", "language"}:
+                                    logger.debug("\t%s: %s", field, value)
+                        if not available_choices:
                             raise RuntimeError("当前场景没有可用选项")
                         selected_choice_id = None
-                        while selected_choice_id not in available_choice_ids:
+                        while selected_choice_id not in available_choices:
                             selected_choice_id = input("输入选项序号，按回车键确定：")
-                        selected_transition = choices_by_id[int(selected_choice_id)]
+                        selected_transition = available_choices[selected_choice_id]
 
                     elif "nexts" in scene:  # 当前scene含有文本块
                         if "texts" in scene:
