@@ -1,4 +1,5 @@
 from handlers import Handlers, HandlerMeta
+from exporters import Exporters
 
 if __name__ == "__main__":
     print("\n选择游戏：")
@@ -22,5 +23,13 @@ if __name__ == "__main__":
         root_dir=root_dir,
         scnchartdata_filepath=scnchartdata_filepath
     )
-    handler.clazz().handle(handler_config)
+    transcript = handler.clazz().handle(handler_config)
+    if transcript is not None:
+        Exporters["txt"].clazz().export(
+            transcript, "output/output.txt", language="sc",
+        )
+        # 按需启用 PDF 导出：
+        # Exporters["pdf"].clazz().export(
+        #     transcript, "output/output.pdf", language="sc",
+        # )
 

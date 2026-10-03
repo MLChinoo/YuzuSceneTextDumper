@@ -10,7 +10,7 @@ class BaseHandler(ABC):
     @final
     def handle(self, config: BaseConfig):
         config.check_valid()
-        self._handle(config)
+        return self._handle(config)
 
     @abstractmethod
     def _handle(self, config: BaseConfig):

@@ -1,6 +1,5 @@
 import json
 import logging
-from io import StringIO
 import os
 import utils.parser
 
@@ -8,7 +7,7 @@ from py_mini_racer import MiniRacer
 
 from configs.dracu_config import DracuConfig
 from handlers import BaseHandler, registry
-from utils.pdf_builder import build_pdf
+from models.story_transcript import DialogueEntry, DialogueTranslation, StoryTranscript
 from utils import language_map
 
 
@@ -17,12 +16,14 @@ logger = logging.getLogger(__name__)
 
 @registry(name="dracu", description="Dracu-Riot! Steam版", config_class=DracuConfig)
 class DracuHandler(BaseHandler):
-    def _handle(self, config: DracuConfig):
+    def _handle(self, config: DracuConfig) -> StoryTranscript:
         logging.basicConfig(
             level=logging.INFO,
             format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         )
-        with MiniRacer() as ctx, StringIO() as transcript_buffer:
+        transcript = StoryTranscript(supported_languages=["jp"])
+        supported_languages = {"jp"}
+        with MiniRacer() as ctx:
             with open(config.scnchartdata_filepath, mode="r", encoding="UTF-16") as file:
                 scnchartdata_json = json.loads(utils.parser.scnchartdata_tjs_to_json(file.read()))
                 flag_names = scnchartdata_json["flagkeys"]
@@ -91,7 +92,6 @@ class DracuHandler(BaseHandler):
             next_label = config.head_label
 
             current_storage = config.head_scn
-            chapter_count = 0
 
             def execute_script(expression):
                 try:
@@ -110,8 +110,7 @@ class DracuHandler(BaseHandler):
                 with open(os.path.join(config.root_dir, f"{current_storage}.json"), mode="r", encoding="UTF-8") as file:
                     script_data = json.load(file)
                 logger.info("读取场景文件成功：%s", script_data["name"])
-                chapter_count += 1
-                transcript_buffer.write(f"【第{chapter_count}章】开始\n")
+                chapter = transcript.add_chapter(current_storage)
                 assert next_storage == script_data["name"]
                 scenes_by_label = {
                     scene["label"]: scene
@@ -170,10 +169,18 @@ class DracuHandler(BaseHandler):
                             for text in scene["texts"]:
                                 speaker_name = text[0]
                                 dialogue_by_language = text[1]
-                                effective_language_id = config.dialogue_language_id if len(dialogue_by_language) > 1 else 0
-                                speaker_alias, dialogue_text = dialogue_by_language[effective_language_id][:2]
-                                speaker_prefix = f"【{speaker_alias or speaker_name}】" if speaker_name else ""
-                                transcript_buffer.write(f"{speaker_prefix}{dialogue_text}\n")
+                                translations = {
+                                    language: DialogueTranslation(
+                                        speaker_alias=dialogue[0],
+                                        text=dialogue[1],
+                                    )
+                                    for language, dialogue in zip(language_map.values(), dialogue_by_language)
+                                }
+                                chapter.entries.append(DialogueEntry(
+                                    original_speaker=speaker_name,
+                                    translations=translations,
+                                ))
+                                supported_languages.update(translations)
                                 if not config.skip_text:
                                     logger.info("原始说话人：%s", speaker_name)
                                     for language_name, dialogue in zip(("日文", "英文", "简中", "繁中"), dialogue_by_language):
@@ -253,13 +260,8 @@ class DracuHandler(BaseHandler):
                         logger.info("storage发生变化，准备读取下一个scenes...")
                         current_storage = next_storage
                         break
-                transcript_buffer.write(f"【第{chapter_count}章】结束\n\n\n\n")
-            raw_text = transcript_buffer.getvalue()
-        logger.info("正在写入文本：%s", config.output_txt_filepath)
-        with open(config.output_txt_filepath, mode="w", encoding="UTF-8") as output_txt:
-            output_txt.write(raw_text)
-        '''logger.info('正在生成pdf：%s，耗时可能较长......', config.output_pdf_filepath)
-        build_pdf(raw_text=raw_text,
-                  language=language_map[config.dialogue_language_id],
-                  outfile=config.output_pdf_filepath)
-        logger.info("成功生成pdf.")'''
+        transcript.supported_languages = [
+            language for language in language_map.values()
+            if language in supported_languages
+        ]
+        return transcript
