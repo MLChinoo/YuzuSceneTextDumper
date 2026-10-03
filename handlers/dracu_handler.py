@@ -25,8 +25,8 @@ class DracuHandler(BaseHandler):
         ctx = MiniRacer()
         with open(config.scnchartdata_filepath, mode="r", encoding="UTF-16") as file:
             scnchartdata_json = json.loads(utils.parser.scnchartdata_tjs_to_json(file.read()))
-            flagkeys = scnchartdata_json["flagkeys"]
-            assert flagkeys == list(scnchartdata_json["flags"].keys())
+            flag_names = scnchartdata_json["flagkeys"]
+            assert flag_names == list(scnchartdata_json["flags"].keys())
             ctx.eval(f"var flags = {json.dumps(scnchartdata_json["flags"])};")
         ctx.eval(f'this["IsTrial"] = {json.dumps(config.is_trial)};')
 
@@ -82,71 +82,71 @@ class DracuHandler(BaseHandler):
         ctx.eval(f'f.sf.clear_eri = {json.dumps(config.clear_eri)};')
         ctx.eval(f'f.sf.clear_nic = {json.dumps(config.clear_nic)};')
 
-        storage = config.head_scn
-        target = config.head_label
+        next_storage = config.head_scn
+        next_label = config.head_label
 
-        current_scn = config.head_scn
-        text_buffer = StringIO()
+        current_storage = config.head_scn
+        transcript_buffer = StringIO()
         chapter_count = 0
 
         def execute_script(expression):
             try:
                 return ctx.eval(expression)
             except Exception as exc:
-                logger.exception("执行脚本失败：%s / %s：%s", current_scn, target, expression)
+                logger.exception("执行脚本失败：%s / %s：%s", current_storage, next_label, expression)
                 raise RuntimeError(
-                    f"执行脚本失败：{current_scn} / {target}：{expression}"
+                    f"执行脚本失败：{current_storage} / {next_label}：{expression}"
                 ) from exc
 
-        while current_scn:
-            if current_scn == "start.ks":
+        while current_storage:
+            if current_storage == "start.ks":
                 logger.info("到达线路结尾，线路结束")
                 break
-            logger.info('准备读取scenes：%s ...', current_scn)
-            with open(os.path.join(config.root_dir, f"{current_scn}.json"), mode="r", encoding="UTF-8") as file:
-                loaded_json = json.load(file)
-                logger.info("读取场景文件成功：%s", loaded_json["name"])
+            logger.info('准备读取scenes：%s ...', current_storage)
+            with open(os.path.join(config.root_dir, f"{current_storage}.json"), mode="r", encoding="UTF-8") as file:
+                script_data = json.load(file)
+                logger.info("读取场景文件成功：%s", script_data["name"])
                 chapter_count += 1
-                text_buffer.write(f"【第{chapter_count}章】开始\n")
-                assert storage == loaded_json["name"]
-                scenes_map = {
+                transcript_buffer.write(f"【第{chapter_count}章】开始\n")
+                assert next_storage == script_data["name"]
+                scenes_by_label = {
                     scene["label"]: scene
-                    for scene in loaded_json["scenes"]
+                    for scene in script_data["scenes"]
                 }
                 while True:
-                    if target is None:
+                    if next_label is None:
                         first_scene = min(
-                            scenes_map.values(),
+                            scenes_by_label.values(),
                             key=lambda scene: int(scene["firstLine"]),
                         )
-                        target = first_scene["label"]
-                    scene = scenes_map[target]
+                        next_label = first_scene["label"]
+                    scene = scenes_by_label[next_label]
                     logger.info(
                         "进入场景：%s / %s，行号：%s，标题：%s",
-                        current_scn, scene["label"], scene["firstLine"], scene["title"],
+                        current_storage, scene["label"], scene["firstLine"], scene["title"],
                     )
                     if not config.skip_flags:
                         logger.info("当前所有flag加点：")
-                        for flagkey in flagkeys:
-                            logger.info('\t%s: %s', flagkey, ctx.eval(flagkey))
-                    assert scene["label"] == target
+                        for flag_name in flag_names:
+                            logger.info('\t%s: %s', flag_name, ctx.eval(flag_name))
+                    assert scene["label"] == next_label
 
                     for expression, value in scene.get("preevals", []):
                         execute_script(f"{expression} = {json.dumps(value)};")
 
                     if "selects" in scene.keys():  # 当前scene含有选择块
                         logger.debug('模式：select')
-                        selects_map = {
+                        choices_by_id = {
                             int(select["selidx"]): select
                             for select in scene["selects"]
                         }
-                        valid_indexes = []
-                        for index in sorted(selects_map):
-                            select = selects_map[index]
+                        available_choice_ids = []
+                        for index in sorted(choices_by_id):
+                            select = choices_by_id[index]
                             if "eval" in select and not ctx.eval(select["eval"]):
                                 logger.info('(X) 第%s个选项【eval不成立，无法选择】：', index)
                             else:
-                                valid_indexes.append(str(index))
+                                available_choice_ids.append(str(index))
                                 logger.info('(%s) 第%s个选项：', index, index)
                             logger.info('\t[日文]%s', select["text"])
                             for index_lang, lang in enumerate(("英文", "简中", "繁中"), start=1):
@@ -159,31 +159,31 @@ class DracuHandler(BaseHandler):
                             logger.debug('\ttarget: %s', select["target"])
                             if "icon" in select.keys():
                                 logger.debug('\ticon: %s', select["icon"])
-                        if not valid_indexes:
+                        if not available_choice_ids:
                             raise RuntimeError("当前场景没有可用选项")
-                        selected_id = None
-                        while selected_id not in valid_indexes:
-                            selected_id = input("输入选项序号，按回车键确定：")
-                        selected_next = selects_map[int(selected_id)]
+                        selected_choice_id = None
+                        while selected_choice_id not in available_choice_ids:
+                            selected_choice_id = input("输入选项序号，按回车键确定：")
+                        selected_transition = choices_by_id[int(selected_choice_id)]
 
                     elif "nexts" in scene.keys():  # 当前scene含有文本块
                         if "texts" in scene.keys():
                             logger.debug('模式：text')
                             for text in scene["texts"]:
                                 speaker_name = text[0]
-                                dialogue_multi_lang = text[1]
-                                output_language_id = config.dialogue_language_id if len(dialogue_multi_lang) > 1 else 0
-                                output_speaker_name = dialogue_multi_lang[output_language_id][0] or speaker_name
-                                output_dialogue_text = dialogue_multi_lang[output_language_id][1]
+                                dialogue_by_language = text[1]
+                                effective_language_id = config.dialogue_language_id if len(dialogue_by_language) > 1 else 0
+                                output_speaker_name = dialogue_by_language[effective_language_id][0] or speaker_name
+                                output_dialogue_text = dialogue_by_language[effective_language_id][1]
                                 output_speaker_prefix = f"【{output_speaker_name}】" if speaker_name else ""
-                                text_buffer.write(f"{output_speaker_prefix}{output_dialogue_text}\n")
+                                transcript_buffer.write(f"{output_speaker_prefix}{output_dialogue_text}\n")
                                 if not config.skip_text:
                                     logger.info('原始说话人：%s', speaker_name)
-                                    logger.info('[日文]%s: %s', dialogue_multi_lang[0][0], dialogue_multi_lang[0][1])
-                                    if len(dialogue_multi_lang) > 1:  # 日文原版或国际中文版的end_of_trial部分无多语言
+                                    logger.info('[日文]%s: %s', dialogue_by_language[0][0], dialogue_by_language[0][1])
+                                    if len(dialogue_by_language) > 1:  # 日文原版或国际中文版的end_of_trial部分无多语言
                                         for index, lang in enumerate(("英文", "简中", "繁中"), start=1):
-                                            speaker_alias = dialogue_multi_lang[index][0]
-                                            dialogue_text = dialogue_multi_lang[index][1]
+                                            speaker_alias = dialogue_by_language[index][0]
+                                            dialogue_text = dialogue_by_language[index][1]
                                             # text_length = dialogue_multi_lang[index][2]
                                             logger.info('[%s]%s: %s', lang, speaker_alias, dialogue_text)
                                     if not config.skip_confirm:
@@ -191,77 +191,77 @@ class DracuHandler(BaseHandler):
                         else:
                             logger.debug('模式：next')
 
-                        nexts_map = {}
-                        for next_cached in scene["nexts"]:
-                            if next_cached.get("type") == 1:
+                        transitions_by_signature = {}
+                        for transition in scene["nexts"]:
+                            if transition.get("type") == 1:
                                 continue
                             signature = utils.generate_next_signature(
-                                eval=next_cached.get("eval"),
-                                storage=next_cached.get("storage"),
-                                target=next_cached.get("target"),
-                                type=next_cached.get("type")
+                                eval=transition.get("eval"),
+                                storage=transition.get("storage"),
+                                target=transition.get("target"),
+                                type=transition.get("type")
                             )
-                            nexts_map[signature] = next_cached
-                        nexts_eval = []
-                        nexts_non_eval = []
-                        for next_cached in nexts_map.values():
-                            if "eval" in next_cached.keys():
-                                nexts_eval.append(next_cached)
+                            transitions_by_signature[signature] = transition
+                        conditional_transitions = []
+                        default_transitions = []
+                        for transition in transitions_by_signature.values():
+                            if "eval" in transition.keys():
+                                conditional_transitions.append(transition)
                             else:  # 有些无条件判断的next会同时存在全年龄版与R18版，需要根据是否开启adult来去重
                                 if config.adult_enabled:
                                     x_signature = utils.generate_next_signature(
-                                        eval=next_cached.get("eval"),
-                                        storage="x_" + next_cached.get("storage"),
-                                        target=next_cached.get("target"),
-                                        type=next_cached.get("type")
+                                        eval=transition.get("eval"),
+                                        storage="x_" + transition.get("storage"),
+                                        target=transition.get("target"),
+                                        type=transition.get("type")
                                     )
-                                    if x_signature in nexts_map.keys():
+                                    if x_signature in transitions_by_signature.keys():
                                         continue
-                                elif next_cached["storage"].startswith("x_"):
+                                elif transition["storage"].startswith("x_"):
                                     non_x_signature = utils.generate_next_signature(
-                                        eval=next_cached.get("eval"),
-                                        storage=next_cached.get("storage").removeprefix("x_"),
-                                        target=next_cached.get("target"),
-                                        type=next_cached.get("type")
+                                        eval=transition.get("eval"),
+                                        storage=transition.get("storage").removeprefix("x_"),
+                                        target=transition.get("target"),
+                                        type=transition.get("type")
                                     )
-                                    if non_x_signature in nexts_map.keys():
+                                    if non_x_signature in transitions_by_signature.keys():
                                         continue
-                                nexts_non_eval.append(next_cached)
-                        for next_eval in nexts_eval:
-                            condition_met = ctx.eval(next_eval["eval"])
-                            logger.debug("跳转条件：%s，结果：%s", next_eval["eval"], condition_met)
+                                default_transitions.append(transition)
+                        for transition in conditional_transitions:
+                            condition_met = ctx.eval(transition["eval"])
+                            logger.debug("跳转条件：%s，结果：%s", transition["eval"], condition_met)
                             if condition_met:
-                                selected_next = next_eval
+                                selected_transition = transition
                                 break
                         else:
-                            if not nexts_non_eval:
+                            if not default_transitions:
                                 logger.info("没有可用的下一场景，线路结束")
-                                current_scn = None
+                                current_storage = None
                                 break
-                            selected_next = nexts_non_eval[0]
+                            selected_transition = default_transitions[0]
                             logger.info("无条件判断：")
 
                     else:
                         raise RuntimeError("?")
 
-                    if selected_next.get("exp"):
-                        rtn = execute_script(selected_next["exp"])
-                        logger.debug('执行exp成功，返回值：%s', rtn)
-                    storage = selected_next["storage"]
-                    target = selected_next.get("target")
+                    if selected_transition.get("exp"):
+                        result = execute_script(selected_transition["exp"])
+                        logger.debug('执行exp成功，返回值：%s', result)
+                    next_storage = selected_transition["storage"]
+                    next_label = selected_transition.get("target")
 
-                    assert storage is not None
-                    if storage.strip() == "":
-                        logger.info('storage为空，回退至当前scenes：%s', current_scn)
-                        storage = current_scn
-                    logger.info("下一场景：%s / %s", storage, target)
-                    if storage != current_scn:
+                    assert next_storage is not None
+                    if next_storage.strip() == "":
+                        logger.info('storage为空，回退至当前scenes：%s', current_storage)
+                        next_storage = current_storage
+                    logger.info("下一场景：%s / %s", next_storage, next_label)
+                    if next_storage != current_storage:
                         logger.info("storage发生变化，准备读取下一个scenes...")
-                        current_scn = storage
+                        current_storage = next_storage
                         break
-                text_buffer.write(f"【第{chapter_count}章】结束\n\n\n\n")
-        raw_text = text_buffer.getvalue()
-        text_buffer.close()
+                transcript_buffer.write(f"【第{chapter_count}章】结束\n\n\n\n")
+        raw_text = transcript_buffer.getvalue()
+        transcript_buffer.close()
         logger.info("正在写入文本：%s", config.output_txt_filepath)
         with open(config.output_txt_filepath, mode="w", encoding="UTF-8") as output_txt:
             output_txt.write(raw_text)
