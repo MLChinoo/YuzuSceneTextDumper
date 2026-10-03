@@ -20,12 +20,12 @@ class SanobaHandler(BaseHandler):
             flagkeys = scnchartdata_json["flagkeys"]
             assert flagkeys == list(scnchartdata_json["flags"].keys())
             ctx.eval(f"var flags = {json.dumps(scnchartdata_json["flags"])};")
-        ctx.eval(f'this["IsTrial"] = {str(config.is_trial).lower()};')
-        ctx.eval(f'this["checkAnyClear"] = {str(config.check_any_clear).lower()};')
-        ctx.eval(f'this["checkIN"] = {str(config.check_in).lower() if config.adult_enabled else "false"};')
-        ctx.eval(f'this["checkOUT"] = {str(config.check_out).lower() if config.adult_enabled else "false"};')
-        ctx.eval(f'this["checkMOUTH"] = {str(config.check_mouth).lower() if config.adult_enabled else "false"};')
-        ctx.eval(f'this["checkFACE"] = {str(config.check_face).lower() if config.adult_enabled else "false"};')
+        ctx.eval(f'this["IsTrial"] = {json.dumps(config.is_trial)};')
+        ctx.eval(f'this["checkAnyClear"] = {json.dumps(config.check_any_clear)};')
+        ctx.eval(f'this["checkIN"] = {json.dumps(config.adult_enabled and config.check_in)};')
+        ctx.eval(f'this["checkOUT"] = {json.dumps(config.adult_enabled and config.check_out)};')
+        ctx.eval(f'this["checkMOUTH"] = {json.dumps(config.adult_enabled and config.check_mouth)};')
+        ctx.eval(f'this["checkFACE"] = {json.dumps(config.adult_enabled and config.check_face)};')
         ctx.eval(r"""
         var f = {};
         function initialize() {
@@ -63,7 +63,7 @@ class SanobaHandler(BaseHandler):
             return !!eval(expr);
         }
         function checkAdult() {
-        """ + f"    return {str(config.adult_enabled).lower()};" + """
+        """ + f"    return {json.dumps(config.adult_enabled)};" + """
         }
         initialize();
         finalize();
@@ -113,6 +113,9 @@ class SanobaHandler(BaseHandler):
                             print(f"\t{flagkey}: {ctx.eval(flagkey)}")
                         print()
                     assert scene["label"] == target
+
+                    for expression, value in scene.get("preevals", []):
+                        ctx.eval(f"{expression} = {json.dumps(value)};")
 
                     if "selects" in scene.keys():  # 当前scene含有选择块
                         print(f"模式：select")
@@ -221,6 +224,8 @@ class SanobaHandler(BaseHandler):
                         for next_eval in nexts_eval:
                             print(f"有条件判断eval：{next_eval["eval"]}\t", end="")
                             if ctx.eval(next_eval["eval"]):
+                                if next_eval.get("exp"):
+                                    ctx.eval(next_eval["exp"])
                                 storage = next_eval["storage"]
                                 target = next_eval["target"]
                                 print("成立√")
@@ -230,6 +235,8 @@ class SanobaHandler(BaseHandler):
                             else:
                                 print("不成立×")
                         else:
+                            if nexts_non_eval[0].get("exp"):
+                                ctx.eval(nexts_non_eval[0]["exp"])
                             storage = nexts_non_eval[0]["storage"]
                             if "target" in nexts_non_eval[0].keys():
                                 target = nexts_non_eval[0]["target"]

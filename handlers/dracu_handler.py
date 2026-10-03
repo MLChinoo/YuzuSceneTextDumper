@@ -20,12 +20,12 @@ class DracuHandler(BaseHandler):
             flagkeys = scnchartdata_json["flagkeys"]
             assert flagkeys == list(scnchartdata_json["flags"].keys())
             ctx.eval(f"var flags = {json.dumps(scnchartdata_json["flags"])};")
-        ctx.eval(f'this["IsTrial"] = {str(config.is_trial).lower()};')
+        ctx.eval(f'this["IsTrial"] = {json.dumps(config.is_trial)};')
 
-        ctx.eval(f'this["checkIN"] = {str(config.check_in).lower() if config.adult_enabled else "false"};')
-        ctx.eval(f'this["checkOUT"] = {str(config.check_out).lower() if config.adult_enabled else "false"};')
-        ctx.eval(f'this["checkMOUTH"] = {str(config.check_mouth).lower() if config.adult_enabled else "false"};')
-        ctx.eval(f'this["checkFACE"] = {str(config.check_face).lower() if config.adult_enabled else "false"};')
+        ctx.eval(f'this["checkIN"] = {json.dumps(config.adult_enabled and config.check_in)};')
+        ctx.eval(f'this["checkOUT"] = {json.dumps(config.adult_enabled and config.check_out)};')
+        ctx.eval(f'this["checkMOUTH"] = {json.dumps(config.adult_enabled and config.check_mouth)};')
+        ctx.eval(f'this["checkFACE"] = {json.dumps(config.adult_enabled and config.check_face)};')
         ctx.eval(r"""
         var f = {sf: {}};
         function initialize() {
@@ -63,16 +63,16 @@ class DracuHandler(BaseHandler):
             return !!eval(expr);
         }
         function checkAdult() {
-        """ + f"    return {str(config.adult_enabled).lower()};" + """
+        """ + f"    return {json.dumps(config.adult_enabled)};" + """
         }
         initialize();
         finalize();
         """)
-        ctx.eval(f'f.sf.clear_miu = {str(config.clear_miu).lower()};')
-        ctx.eval(f'f.sf.clear_azu = {str(config.clear_azu).lower()};')
-        ctx.eval(f'f.sf.clear_rio = {str(config.clear_rio).lower()};')
-        ctx.eval(f'f.sf.clear_eri = {str(config.clear_eri).lower()};')
-        ctx.eval(f'f.sf.clear_nic = {str(config.clear_nic).lower()};')
+        ctx.eval(f'f.sf.clear_miu = {json.dumps(config.clear_miu)};')
+        ctx.eval(f'f.sf.clear_azu = {json.dumps(config.clear_azu)};')
+        ctx.eval(f'f.sf.clear_rio = {json.dumps(config.clear_rio)};')
+        ctx.eval(f'f.sf.clear_eri = {json.dumps(config.clear_eri)};')
+        ctx.eval(f'f.sf.clear_nic = {json.dumps(config.clear_nic)};')
 
         storage = config.head_scn
         target = config.head_label
@@ -118,19 +118,9 @@ class DracuHandler(BaseHandler):
                             print(f"\t{flagkey}: {ctx.eval(flagkey)}")
                         print()
                     assert scene["label"] == target
-                    
-                    # FUCK YOU WAMSOFT
-                    match scene["label"]:
-                        case "*route_jump_miu":
-                            ctx.eval('f.route_jump = "miu"')
-                        case "*route_jump_azu":
-                            ctx.eval('f.route_jump = "azu"')
-                        case "*route_jump_rio":
-                            ctx.eval('f.route_jump = "rio"')
-                        case "*route_jump_eri":
-                            ctx.eval('f.route_jump = "eri"')
-                        case "*route_jump_nic":
-                            ctx.eval('f.route_jump = "nic"')
+
+                    for expression, value in scene.get("preevals", []):
+                        ctx.eval(f"{expression} = {json.dumps(value)};")
 
                     if "selects" in scene.keys():  # 当前scene含有选择块
                         print(f"模式：select")
@@ -241,6 +231,8 @@ class DracuHandler(BaseHandler):
                         for next_eval in nexts_eval:
                             print(f"有条件判断eval：{next_eval["eval"]}\t", end="")
                             if ctx.eval(next_eval["eval"]):
+                                if next_eval.get("exp"):
+                                    ctx.eval(next_eval["exp"])
                                 storage = next_eval["storage"]
                                 target = next_eval["target"]
                                 print("成立√")
@@ -250,6 +242,8 @@ class DracuHandler(BaseHandler):
                             else:
                                 print("不成立×")
                         else:
+                            if nexts_non_eval[0].get("exp"):
+                                ctx.eval(nexts_non_eval[0]["exp"])
                             storage = nexts_non_eval[0]["storage"]
                             if "target" in nexts_non_eval[0].keys():
                                 target = nexts_non_eval[0]["target"]
