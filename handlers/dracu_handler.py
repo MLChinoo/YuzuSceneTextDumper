@@ -193,6 +193,8 @@ class DracuHandler(BaseHandler):
 
                         nexts_map = {}
                         for next_cached in scene["nexts"]:
+                            if next_cached.get("type") == 1:
+                                continue
                             signature = utils.generate_next_signature(
                                 eval=next_cached.get("eval"),
                                 storage=next_cached.get("storage"),
@@ -203,15 +205,13 @@ class DracuHandler(BaseHandler):
                         nexts_eval = []
                         nexts_non_eval = []
                         for next_cached in nexts_map.values():
-                            # if next_cached.get("type") == 1:
-                            #     continue
                             if "eval" in next_cached.keys():
                                 nexts_eval.append(next_cached)
                             else:  # 有些无条件判断的next会同时存在全年龄版与R18版，需要根据是否开启adult来去重
                                 if config.adult_enabled:
                                     x_signature = utils.generate_next_signature(
                                         eval=next_cached.get("eval"),
-                                        storage="x_" + str(next_cached.get("storage")),
+                                        storage="x_" + next_cached.get("storage"),
                                         target=next_cached.get("target"),
                                         type=next_cached.get("type")
                                     )
@@ -220,14 +220,13 @@ class DracuHandler(BaseHandler):
                                 elif next_cached["storage"].startswith("x_"):
                                     non_x_signature = utils.generate_next_signature(
                                         eval=next_cached.get("eval"),
-                                        storage=str(next_cached.get("storage")).removeprefix("x_"),
+                                        storage=next_cached.get("storage").removeprefix("x_"),
                                         target=next_cached.get("target"),
                                         type=next_cached.get("type")
                                     )
                                     if non_x_signature in nexts_map.keys():
                                         continue
                                 nexts_non_eval.append(next_cached)
-                        # assert len(nexts_non_eval) <= 1
                         for next_eval in nexts_eval:
                             print(f"有条件判断eval：{next_eval["eval"]}\t", end="")
                             if ctx.eval(next_eval["eval"]):
@@ -242,6 +241,10 @@ class DracuHandler(BaseHandler):
                             else:
                                 print("不成立×")
                         else:
+                            if not nexts_non_eval:
+                                print("没有可用的下一场景，线路结束")
+                                current_scn = None
+                                break
                             if nexts_non_eval[0].get("exp"):
                                 ctx.eval(nexts_non_eval[0]["exp"])
                             storage = nexts_non_eval[0]["storage"]

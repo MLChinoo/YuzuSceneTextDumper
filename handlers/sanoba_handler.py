@@ -188,6 +188,8 @@ class SanobaHandler(BaseHandler):
 
                         nexts_map = {}
                         for next_cached in scene["nexts"]:
+                            if next_cached.get("type") == 1:
+                                continue
                             signature = utils.generate_next_signature(
                                 eval=next_cached.get("eval"),
                                 storage=next_cached.get("storage"),
@@ -220,7 +222,7 @@ class SanobaHandler(BaseHandler):
                                     if non_x_signature in nexts_map.keys():
                                         continue
                                 nexts_non_eval.append(next_cached)
-                        assert len(nexts_non_eval) == 1
+                        assert len(nexts_non_eval) <= 1
                         for next_eval in nexts_eval:
                             print(f"有条件判断eval：{next_eval["eval"]}\t", end="")
                             if ctx.eval(next_eval["eval"]):
@@ -235,6 +237,10 @@ class SanobaHandler(BaseHandler):
                             else:
                                 print("不成立×")
                         else:
+                            if not nexts_non_eval:
+                                print("没有可用的下一场景，线路结束")
+                                current_scn = None
+                                break
                             if nexts_non_eval[0].get("exp"):
                                 ctx.eval(nexts_non_eval[0]["exp"])
                             storage = nexts_non_eval[0]["storage"]
