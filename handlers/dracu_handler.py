@@ -1,4 +1,6 @@
 import json
+import logging
+from io import StringIO
 import os
 import utils.parser
 
@@ -10,9 +12,16 @@ from utils.pdf_builder import build_pdf
 from utils import language_map
 
 
+logger = logging.getLogger(__name__)
+
+
 @registry(name="dracu", description="Dracu-Riot! Steam版", config_class=DracuConfig)
 class DracuHandler(BaseHandler):
     def _handle(self, config: DracuConfig):
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        )
         ctx = MiniRacer()
         with open(config.scnchartdata_filepath, mode="r", encoding="UTF-16") as file:
             scnchartdata_json = json.loads(utils.parser.scnchartdata_tjs_to_json(file.read()))
@@ -77,33 +86,29 @@ class DracuHandler(BaseHandler):
         target = config.head_label
 
         current_scn = config.head_scn
-        output_txt = open(config.output_txt_filepath, mode="w+", encoding="UTF-8")
+        text_buffer = StringIO()
         chapter_count = 0
 
         def execute_script(expression):
             try:
                 return ctx.eval(expression)
             except Exception as exc:
+                logger.exception("执行脚本失败：%s / %s：%s", current_scn, target, expression)
                 raise RuntimeError(
                     f"执行脚本失败：{current_scn} / {target}：{expression}"
                 ) from exc
 
         while current_scn:
-            print()
             if current_scn == "start.ks":
-                print("到达线路结尾，线路结束")
-                print()
+                logger.info("到达线路结尾，线路结束")
                 break
-            print(f"准备读取scenes：{current_scn} ...")
+            logger.info('准备读取scenes：%s ...', current_scn)
             with open(os.path.join(config.root_dir, f"{current_scn}.json"), mode="r", encoding="UTF-8") as file:
                 loaded_json = json.load(file)
-                print(f"读取scenes：{current_scn} 成功")
-                print(f"\tname: {loaded_json["name"]}")
+                logger.info("读取场景文件成功：%s", loaded_json["name"])
                 chapter_count += 1
-                output_txt.write(f"【第{chapter_count}章】开始\n")
-                # input("[DEBUG]回车继续")
+                text_buffer.write(f"【第{chapter_count}章】开始\n")
                 assert storage == loaded_json["name"]
-                print("————————————————————")
                 scenes_map = {
                     scene["label"]: scene
                     for scene in loaded_json["scenes"]
@@ -116,23 +121,21 @@ class DracuHandler(BaseHandler):
                         )
                         target = first_scene["label"]
                     scene = scenes_map[target]
-                    print("当前scene：")
-                    print(f"\tfirstLine: {scene["firstLine"]}")
-                    print(f"\tlabel: {scene["label"]}（应与上一个target一致）")
-                    print(f"\ttitle: {scene["title"]}")
-                    print()
+                    logger.info(
+                        "进入场景：%s / %s，行号：%s，标题：%s",
+                        current_scn, scene["label"], scene["firstLine"], scene["title"],
+                    )
                     if not config.skip_flags:
-                        print("当前所有flag加点：")
+                        logger.info("当前所有flag加点：")
                         for flagkey in flagkeys:
-                            print(f"\t{flagkey}: {ctx.eval(flagkey)}")
-                        print()
+                            logger.info('\t%s: %s', flagkey, ctx.eval(flagkey))
                     assert scene["label"] == target
 
                     for expression, value in scene.get("preevals", []):
                         execute_script(f"{expression} = {json.dumps(value)};")
 
                     if "selects" in scene.keys():  # 当前scene含有选择块
-                        print(f"模式：select")
+                        logger.debug('模式：select')
                         selects_map = {
                             int(select["selidx"]): select
                             for select in scene["selects"]
@@ -141,21 +144,21 @@ class DracuHandler(BaseHandler):
                         for index in sorted(selects_map):
                             select = selects_map[index]
                             if "eval" in select and not ctx.eval(select["eval"]):
-                                print(f"(X) 第{index}个选项【eval不成立，无法选择】：")
+                                logger.info('(X) 第%s个选项【eval不成立，无法选择】：', index)
                             else:
                                 valid_indexes.append(str(index))
-                                print(f"({index}) 第{index}个选项：")
-                            print(f"\t[日文]{select["text"]}")
+                                logger.info('(%s) 第%s个选项：', index, index)
+                            logger.info('\t[日文]%s', select["text"])
                             for index_lang, lang in enumerate(("英文", "简中", "繁中"), start=1):
-                                print(f"\t[{lang}]{select["language"][index_lang]["text"]}")
-                            print(f"\ttag: {select["tag"]}")
+                                logger.info('\t[%s]%s', lang, select["language"][index_lang]["text"])
+                            logger.debug('\ttag: %s', select["tag"])
                             if "eval" in select.keys():
-                                print(f"\teval: {select["eval"]}")
-                            print(f"\texp: {select["exp"]}")
-                            print(f"\tstorage: {select["storage"]}")
-                            print(f"\ttarget: {select["target"]}")
+                                logger.debug('\teval: %s', select["eval"])
+                            logger.debug('\texp: %s', select["exp"])
+                            logger.debug('\tstorage: %s', select["storage"])
+                            logger.debug('\ttarget: %s', select["target"])
                             if "icon" in select.keys():
-                                print(f"\ticon: {select["icon"]}")
+                                logger.debug('\ticon: %s', select["icon"])
                         if not valid_indexes:
                             raise RuntimeError("当前场景没有可用选项")
                         selected_id = None
@@ -165,7 +168,7 @@ class DracuHandler(BaseHandler):
 
                     elif "nexts" in scene.keys():  # 当前scene含有文本块
                         if "texts" in scene.keys():
-                            print(f"模式：text")
+                            logger.debug('模式：text')
                             for text in scene["texts"]:
                                 speaker_name = text[0]
                                 dialogue_multi_lang = text[1]
@@ -173,22 +176,20 @@ class DracuHandler(BaseHandler):
                                 output_speaker_name = dialogue_multi_lang[output_language_id][0] or speaker_name
                                 output_dialogue_text = dialogue_multi_lang[output_language_id][1]
                                 output_speaker_prefix = f"【{output_speaker_name}】" if speaker_name else ""
-                                output_txt.write(f"{output_speaker_prefix}{output_dialogue_text}\n")
+                                text_buffer.write(f"{output_speaker_prefix}{output_dialogue_text}\n")
                                 if not config.skip_text:
-                                    print()
-                                    print(f"原始说话人：{speaker_name}")
-                                    print(f"[日文]{dialogue_multi_lang[0][0]}: {dialogue_multi_lang[0][1]}")
+                                    logger.info('原始说话人：%s', speaker_name)
+                                    logger.info('[日文]%s: %s', dialogue_multi_lang[0][0], dialogue_multi_lang[0][1])
                                     if len(dialogue_multi_lang) > 1:  # 日文原版或国际中文版的end_of_trial部分无多语言
                                         for index, lang in enumerate(("英文", "简中", "繁中"), start=1):
                                             speaker_alias = dialogue_multi_lang[index][0]
                                             dialogue_text = dialogue_multi_lang[index][1]
                                             # text_length = dialogue_multi_lang[index][2]
-                                            print(f"[{lang}]{speaker_alias}: {dialogue_text}")
+                                            logger.info('[%s]%s: %s', lang, speaker_alias, dialogue_text)
                                     if not config.skip_confirm:
                                         input("按回车键继续：")
                         else:
-                            print(f"模式：next")
-                        print()
+                            logger.debug('模式：next')
 
                         nexts_map = {}
                         for next_cached in scene["nexts"]:
@@ -227,48 +228,45 @@ class DracuHandler(BaseHandler):
                                         continue
                                 nexts_non_eval.append(next_cached)
                         for next_eval in nexts_eval:
-                            print(f"有条件判断eval：{next_eval["eval"]}\t", end="")
-                            if ctx.eval(next_eval["eval"]):
+                            condition_met = ctx.eval(next_eval["eval"])
+                            logger.debug("跳转条件：%s，结果：%s", next_eval["eval"], condition_met)
+                            if condition_met:
                                 selected_next = next_eval
-                                print("成立√")
                                 break
-                            else:
-                                print("不成立×")
                         else:
                             if not nexts_non_eval:
-                                print("没有可用的下一场景，线路结束")
+                                logger.info("没有可用的下一场景，线路结束")
                                 current_scn = None
                                 break
                             selected_next = nexts_non_eval[0]
-                            print("无条件判断：")
+                            logger.info("无条件判断：")
 
                     else:
                         raise RuntimeError("?")
 
                     if selected_next.get("exp"):
                         rtn = execute_script(selected_next["exp"])
-                        print(f"执行exp成功，返回值：{rtn}")
+                        logger.debug('执行exp成功，返回值：%s', rtn)
                     storage = selected_next["storage"]
                     target = selected_next.get("target")
 
                     assert storage is not None
-                    print()
-                    print("下一个scene已确定：")
-                    print(f"\tstorage: {storage}")
-                    print(f"\ttarget: {target}")
                     if storage.strip() == "":
-                        print(f"storage为空，回退至当前scenes：{current_scn}")
+                        logger.info('storage为空，回退至当前scenes：%s', current_scn)
                         storage = current_scn
-                    print("————————————————————")
+                    logger.info("下一场景：%s / %s", storage, target)
                     if storage != current_scn:
-                        print("storage发生变化，准备读取下一个scenes...")
+                        logger.info("storage发生变化，准备读取下一个scenes...")
                         current_scn = storage
                         break
-                output_txt.write(f"【第{chapter_count}章】结束\n\n\n\n")
-        output_txt.seek(0)
-        print(f"正在生成pdf：{config.output_pdf_filepath}，耗时可能较长......")
-        build_pdf(raw_text=output_txt.read(),
+                text_buffer.write(f"【第{chapter_count}章】结束\n\n\n\n")
+        raw_text = text_buffer.getvalue()
+        text_buffer.close()
+        logger.info("正在写入文本：%s", config.output_txt_filepath)
+        with open(config.output_txt_filepath, mode="w", encoding="UTF-8") as output_txt:
+            output_txt.write(raw_text)
+        logger.info('正在生成pdf：%s，耗时可能较长......', config.output_pdf_filepath)
+        build_pdf(raw_text=raw_text,
                   language=language_map[config.dialogue_language_id],
                   outfile=config.output_pdf_filepath)
-        print("成功生成pdf.")
-        output_txt.close()
+        logger.info("成功生成pdf.")
