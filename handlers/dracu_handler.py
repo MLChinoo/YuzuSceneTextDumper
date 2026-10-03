@@ -173,19 +173,14 @@ class DracuHandler(BaseHandler):
                                 speaker_name = text[0]
                                 dialogue_by_language = text[1]
                                 effective_language_id = config.dialogue_language_id if len(dialogue_by_language) > 1 else 0
-                                output_speaker_name = dialogue_by_language[effective_language_id][0] or speaker_name
-                                output_dialogue_text = dialogue_by_language[effective_language_id][1]
-                                output_speaker_prefix = f"【{output_speaker_name}】" if speaker_name else ""
-                                transcript_buffer.write(f"{output_speaker_prefix}{output_dialogue_text}\n")
+                                speaker_alias, dialogue_text = dialogue_by_language[effective_language_id][:2]
+                                speaker_prefix = f"【{speaker_alias or speaker_name}】" if speaker_name else ""
+                                transcript_buffer.write(f"{speaker_prefix}{dialogue_text}\n")
                                 if not config.skip_text:
-                                    logger.info('原始说话人：%s', speaker_name)
-                                    logger.info('[日文]%s: %s', dialogue_by_language[0][0], dialogue_by_language[0][1])
-                                    if len(dialogue_by_language) > 1:  # 日文原版或国际中文版的end_of_trial部分无多语言
-                                        for index, lang in enumerate(("英文", "简中", "繁中"), start=1):
-                                            speaker_alias = dialogue_by_language[index][0]
-                                            dialogue_text = dialogue_by_language[index][1]
-                                            # text_length = dialogue_multi_lang[index][2]
-                                            logger.info('[%s]%s: %s', lang, speaker_alias, dialogue_text)
+                                    logger.info("原始说话人：%s", speaker_name)
+                                    for language_name, dialogue in zip(("日文", "英文", "简中", "繁中"), dialogue_by_language):
+                                        speaker_alias, dialogue_text = dialogue[:2]
+                                        logger.info("[%s]%s: %s", language_name, speaker_alias, dialogue_text)
                                     if not config.skip_confirm:
                                         input("按回车键继续：")
                         else:
