@@ -134,7 +134,7 @@ class DracuHandler(BaseHandler):
                     for expression, value in scene.get("preevals", []):
                         execute_script(f"{expression} = {json.dumps(value)};")
 
-                    if "selects" in scene.keys():  # 当前scene含有选择块
+                    if "selects" in scene:  # 当前scene含有选择块
                         logger.debug('模式：select')
                         choices_by_id = {
                             int(select["selidx"]): select
@@ -152,12 +152,12 @@ class DracuHandler(BaseHandler):
                             for index_lang, lang in enumerate(("英文", "简中", "繁中"), start=1):
                                 logger.info('\t[%s]%s', lang, select["language"][index_lang]["text"])
                             logger.debug('\ttag: %s', select["tag"])
-                            if "eval" in select.keys():
+                            if "eval" in select:
                                 logger.debug('\teval: %s', select["eval"])
                             logger.debug('\texp: %s', select["exp"])
                             logger.debug('\tstorage: %s', select["storage"])
                             logger.debug('\ttarget: %s', select["target"])
-                            if "icon" in select.keys():
+                            if "icon" in select:
                                 logger.debug('\ticon: %s', select["icon"])
                         if not available_choice_ids:
                             raise RuntimeError("当前场景没有可用选项")
@@ -166,8 +166,8 @@ class DracuHandler(BaseHandler):
                             selected_choice_id = input("输入选项序号，按回车键确定：")
                         selected_transition = choices_by_id[int(selected_choice_id)]
 
-                    elif "nexts" in scene.keys():  # 当前scene含有文本块
-                        if "texts" in scene.keys():
+                    elif "nexts" in scene:  # 当前scene含有文本块
+                        if "texts" in scene:
                             logger.debug('模式：text')
                             for text in scene["texts"]:
                                 speaker_name = text[0]
@@ -195,50 +195,51 @@ class DracuHandler(BaseHandler):
                         for transition in scene["nexts"]:
                             if transition.get("type") == 1:
                                 continue
-                            signature = utils.generate_next_signature(
-                                eval=transition.get("eval"),
-                                storage=transition.get("storage"),
-                                target=transition.get("target"),
-                                type=transition.get("type")
+                            signature = (
+                                transition.get("eval"),
+                                transition.get("storage"),
+                                transition.get("target"),
+                                transition.get("type"),
                             )
                             transitions_by_signature[signature] = transition
-                        conditional_transitions = []
-                        default_transitions = []
+
+                        selected_transition = None
+                        default_transition = None
                         for transition in transitions_by_signature.values():
-                            if "eval" in transition.keys():
-                                conditional_transitions.append(transition)
-                            else:  # 有些无条件判断的next会同时存在全年龄版与R18版，需要根据是否开启adult来去重
-                                if config.adult_enabled:
-                                    x_signature = utils.generate_next_signature(
-                                        eval=transition.get("eval"),
-                                        storage="x_" + transition.get("storage"),
-                                        target=transition.get("target"),
-                                        type=transition.get("type")
-                                    )
-                                    if x_signature in transitions_by_signature.keys():
-                                        continue
-                                elif transition["storage"].startswith("x_"):
-                                    non_x_signature = utils.generate_next_signature(
-                                        eval=transition.get("eval"),
-                                        storage=transition.get("storage").removeprefix("x_"),
-                                        target=transition.get("target"),
-                                        type=transition.get("type")
-                                    )
-                                    if non_x_signature in transitions_by_signature.keys():
-                                        continue
-                                default_transitions.append(transition)
-                        for transition in conditional_transitions:
-                            condition_met = ctx.eval(transition["eval"])
-                            logger.debug("跳转条件：%s，结果：%s", transition["eval"], condition_met)
-                            if condition_met:
-                                selected_transition = transition
-                                break
-                        else:
-                            if not default_transitions:
+                            if "eval" in transition:
+                                condition_met = ctx.eval(transition["eval"])
+                                logger.debug("跳转条件：%s，结果：%s", transition["eval"], condition_met)
+                                if condition_met:
+                                    selected_transition = transition
+                                    break
+                                continue
+
+                            # 两个版本同时存在时，根据成人开关保留对应版本。
+                            transition_storage = transition["storage"]
+                            if config.adult_enabled:
+                                counterpart_storage = "x_" + transition_storage
+                            elif transition_storage.startswith("x_"):
+                                counterpart_storage = transition_storage.removeprefix("x_")
+                            else:
+                                counterpart_storage = None
+                            if counterpart_storage is not None:
+                                counterpart_signature = (
+                                    transition.get("eval"),
+                                    counterpart_storage,
+                                    transition.get("target"),
+                                    transition.get("type"),
+                                )
+                                if counterpart_signature in transitions_by_signature:
+                                    continue
+                            if default_transition is None:
+                                default_transition = transition
+
+                        if selected_transition is None:
+                            selected_transition = default_transition
+                            if selected_transition is None:
                                 logger.info("没有可用的下一场景，线路结束")
                                 current_storage = None
                                 break
-                            selected_transition = default_transitions[0]
                             logger.info("无条件判断：")
 
                     else:
@@ -265,8 +266,8 @@ class DracuHandler(BaseHandler):
         logger.info("正在写入文本：%s", config.output_txt_filepath)
         with open(config.output_txt_filepath, mode="w", encoding="UTF-8") as output_txt:
             output_txt.write(raw_text)
-        logger.info('正在生成pdf：%s，耗时可能较长......', config.output_pdf_filepath)
+        '''logger.info('正在生成pdf：%s，耗时可能较长......', config.output_pdf_filepath)
         build_pdf(raw_text=raw_text,
                   language=language_map[config.dialogue_language_id],
                   outfile=config.output_pdf_filepath)
-        logger.info("成功生成pdf.")
+        logger.info("成功生成pdf.")'''
