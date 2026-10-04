@@ -17,14 +17,22 @@ logger = logging.getLogger(__name__)
 @registry(name="dracu", description="Dracu-Riot! Steam版", config_class=DracuConfig)
 class DracuHandler(BaseHandler):
     def _handle(self, config: DracuConfig) -> StoryTranscript:
-        def execute(expression):
+        def execute_expression(expression):
             try:
                 return ctx.eval(expression)
             except Exception as exc:
-                logger.exception("执行脚本失败：%s / %s：%s", current_storage, next_label, expression)
+                logger.exception("执行expression失败：%s / %s：%s", current_storage, next_label, expression)
                 raise RuntimeError(
-                    f"执行脚本失败：{current_storage} / {next_label}：{expression}"
+                    f"执行expression失败：{current_storage} / {next_label}：{expression}"
                 ) from exc
+
+        def execute_evals(evals):
+            for item in evals:
+                if isinstance(item, str):
+                    execute_expression(item)
+                else:
+                    expression, value = item
+                    execute_expression(f"{expression} = {json.dumps(value)};")
 
         def resolve_text(text):
             def replace_expression(match):
@@ -32,7 +40,7 @@ class DracuHandler(BaseHandler):
                 # TJS 的 $数字 是字符字面量，例如 $38 表示 &。
                 if re.fullmatch(r"\$\d+", expression):
                     return chr(int(expression[1:]))
-                return execute(f"String(({expression}))")
+                return execute_expression(f"String(({expression}))")
 
             return re.sub(r"\$\{([^{}]+)\}", replace_expression, text)
 
@@ -69,16 +77,13 @@ class DracuHandler(BaseHandler):
 
             ctx.eval(f"function checkAdult() {{ return {json.dumps(config.adult_enabled)}; }}")
 
-            # 定义分支计算函数，并初始化脚本状态。
+            # 定义flag加点计算函数，并初始化脚本状态。
             ctx.eval(r"""
-            var f = {sf: {}};
+            var sf = {};
+            // f 是全局对象的代理，属性读写和删除共享同一份状态。
+            var f = new Proxy(globalThis, {});
             function initialize() {
-                Object.keys(flags).forEach(key => this[key] = 0);
-            }
-            function finalize() {
-                Object.keys(this).forEach(k => {
-                    f[k] = this[k];
-                });
+                Object.keys(flags).forEach(key => globalThis[key] = 0);
             }
             function UpdateBranchFlags() {
                 initialize();
@@ -89,25 +94,26 @@ class DracuHandler(BaseHandler):
                         var selection = condition[0];
                         var selected_id = condition[1];
                         var bonus = condition[2];
-                        if (this[selection] === selected_id) {
-                            this[character] += bonus;
+                        if (globalThis[selection] === selected_id) {
+                            globalThis[character] += bonus;
                         }
                     }
                 }
-                finalize();
             }
             function SetBranchFlags(varName, value) {
-                this[varName] = value;
+                f[varName] = value;
+                sf[varName] = value;
                 UpdateBranchFlags();
             }
-            function CheckBranchFlags(expr) {
-                // js强兼tjs语法
-                expr = " " + expr;
-                expr = expr.replace(/ \./g, " f.");
-                return !!eval(expr);
+            function CheckBranchFlags(expression) {
+                // 去掉 TJS 省略对象前缀的前导点，直接访问全局字段。
+                const normalized = expression.replace(
+                    /(^|[^\w$.])\.(?=[A-Za-z_$])/g,
+                    "$1"
+                );
+                return Boolean(eval(normalized));
             }
             initialize();
-            finalize();
             """)
 
             # DR独有：初始化各角色线路的通关状态。
@@ -118,7 +124,7 @@ class DracuHandler(BaseHandler):
                 "clear_eri": config.clear_eri,
                 "clear_nic": config.clear_nic,
             }
-            ctx.eval(f"Object.assign(f.sf, {json.dumps(clear_flags)});")
+            ctx.eval(f"Object.assign(sf, {json.dumps(clear_flags)});")
 
             # 设置流程起点。
             next_storage = config.head_scn
@@ -163,8 +169,7 @@ class DracuHandler(BaseHandler):
                             logger.info('\t%s: %s', flag_name, ctx.eval(flag_name))
 
                     # 执行preevals。
-                    for expression, value in scene.get("preevals", []):
-                        execute(f"{expression} = {json.dumps(value)};")
+                    execute_evals(scene.get("preevals", []))
 
                     # 选择块：筛选可用选项，等待用户选择。
                     if "selects" in scene:
@@ -193,6 +198,9 @@ class DracuHandler(BaseHandler):
                         while selected_choice_id not in available_choices:
                             selected_choice_id = logged_input(logger, "输入选项序号（括号内数字），按回车键确定：")
                         selected_transition = available_choices[selected_choice_id]
+
+                        # 选择完成后执行场景末尾的 postevals。
+                        execute_evals(scene.get("postevals", []))
 
                     # 自动跳转块：先收集正文，再选择下一位置。
                     elif "nexts" in scene:
@@ -223,6 +231,9 @@ class DracuHandler(BaseHandler):
                                         logged_input(logger, "按回车键继续：")
                         else:
                             logger.info('当前状态机模式：next')
+
+                        # 正文处理完成后执行 postevals，再判断跳转条件。
+                        execute_evals(scene.get("postevals", []))
 
                         # 整理候选：过滤 type == 1，并按跳转签名去重。
                         transitions_by_signature = {}
@@ -283,7 +294,7 @@ class DracuHandler(BaseHandler):
 
                     # 执行选中项的 exp，再更新位置或切换文件。
                     if selected_transition.get("exp"):
-                        result = execute(selected_transition["exp"])
+                        result = execute_expression(selected_transition["exp"])
                         logger.debug('执行exp成功，返回值：%s', result)
                     next_storage = selected_transition["storage"]
                     next_label = selected_transition.get("target")
