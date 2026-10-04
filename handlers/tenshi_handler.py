@@ -1,5 +1,4 @@
 import json
-import os
 import traceback
 import utils.parser
 
@@ -15,7 +14,7 @@ from utils import language_map
 class TenshiHandler(BaseHandler):
     def _handle(self, config: TenshiConfig):
         ctx = MiniRacer()
-        with open(config.scnchartdata_filepath, mode="r", encoding="UTF-16") as file:
+        with config.scnchartdata_filepath.open(mode="r", encoding="UTF-16") as file:
             scnchartdata_json = json.loads(utils.parser.scnchartdata_tjs_to_json(file.read()))
             flagkeys = scnchartdata_json["flagkeys"]
             assert flagkeys == list(scnchartdata_json["flags"].keys())
@@ -82,7 +81,7 @@ class TenshiHandler(BaseHandler):
                 print()
                 break
             print(f"准备读取scenes：{current_scn} ...")
-            with open(os.path.join(config.root_dir, f"{current_scn}.json"), mode="r", encoding="UTF-8") as file:
+            with (config.root_dir / f"{current_scn}.json").open(mode="r", encoding="UTF-8") as file:
                 loaded_json = json.load(file)
                 print(f"读取scenes：{current_scn} 成功")
                 print(f"\tname: {loaded_json["name"]}")

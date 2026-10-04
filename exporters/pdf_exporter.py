@@ -29,6 +29,8 @@ class PdfExporter(BaseExporter):
         *,
         language: str,
     ) -> None:
+        outfile = Path(outfile)
+        outfile.parent.mkdir(parents=True, exist_ok=True)
         logger.info("正在生成pdf：%s，耗时可能较长......", outfile)
         regular_font, bold_font = _register_fonts(language)
         styles = _build_styles(regular_font, bold_font)

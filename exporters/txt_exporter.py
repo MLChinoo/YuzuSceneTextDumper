@@ -17,8 +17,10 @@ class TxtExporter(BaseExporter):
         *,
         language: str,
     ) -> None:
+        outfile = Path(outfile)
+        outfile.parent.mkdir(parents=True, exist_ok=True)
         logger.info("正在写入文本：%s", outfile)
-        with Path(outfile).open("w", encoding="UTF-8", newline="") as output:
+        with outfile.open("w", encoding="UTF-8", newline="") as output:
             for number, chapter in enumerate(transcript.chapters, start=1):
                 output.write(f"【第{number}章】开始\n")
                 for entry in chapter.entries:

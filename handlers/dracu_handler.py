@@ -1,13 +1,13 @@
 import json
 import logging
-import os
 import utils.parser
 
 from py_mini_racer import MiniRacer
 
 from configs.dracu_config import DracuConfig
 from handlers import BaseHandler, registry
-from models.story_transcript import DialogueEntry, DialogueTranslation, StoryTranscript
+from models.story_transcript import Chapter, DialogueEntry, DialogueTranslation, StoryTranscript
+from utils import logged_input
 
 
 logger = logging.getLogger(__name__)
@@ -25,15 +25,11 @@ class DracuHandler(BaseHandler):
                     f"执行脚本失败：{current_storage} / {next_label}：{expression}"
                 ) from exc
 
-        # 初始化日志和本次剧情记录。
-        logging.basicConfig(
-            level=logging.DEBUG,
-            format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        )
-        transcript = StoryTranscript(supported_languages=["jp"])
+        # 初始化本次剧本记录。
+        transcript = StoryTranscript()
         with MiniRacer() as ctx:
             # 加载角色加点规则，供后续分支计算使用。
-            with open(config.scnchartdata_filepath, mode="r", encoding="UTF-16") as file:
+            with config.scnchartdata_filepath.open(mode="r", encoding="UTF-16") as file:
                 scnchartdata_json = json.loads(utils.parser.scnchartdata_tjs_to_json(file.read()))
                 flag_names = scnchartdata_json["flagkeys"]
                 assert flag_names == list(scnchartdata_json["flags"].keys())
@@ -114,14 +110,13 @@ class DracuHandler(BaseHandler):
                 if current_storage == "start.ks":
                     logger.info("到达线路结尾，线路结束")
                     break
-                logger.info('准备读取scenes：%s ...', current_storage)
-                with open(os.path.join(config.root_dir, f"{current_storage}.json"), mode="r", encoding="UTF-8") as file:
+                logger.info('准备读取场景文件：%s ...', current_storage)
+                with (config.root_dir / f"{current_storage}.json").open(mode="r", encoding="UTF-8") as file:
                     script_data = json.load(file)
-                # 仅从初始脚本读取语言声明，保留原始语言代码。
                 if not transcript.chapters:
                     transcript.supported_languages.extend(script_data.get("languages", []))
-                logger.info("读取场景文件成功：%s", script_data["name"])
-                chapter = transcript.add_chapter(current_storage)
+                logger.info("已读取场景文件：%s", script_data["name"])
+                chapter = Chapter(storage=current_storage)
                 assert next_storage == script_data["name"]
                 scenes_by_label = {
                     scene["label"]: scene
@@ -138,21 +133,21 @@ class DracuHandler(BaseHandler):
                         next_label = first_scene["label"]
                     scene = scenes_by_label[next_label]
                     logger.info(
-                        "进入场景：%s / %s，行号：%s，标题：%s",
-                        current_storage, scene["label"], scene["firstLine"], scene["title"],
+                        "已进入场景：%s / %s",
+                        current_storage, scene["label"],
                     )
                     if not config.skip_flags:
                         logger.info("当前所有flag加点：")
                         for flag_name in flag_names:
                             logger.info('\t%s: %s', flag_name, ctx.eval(flag_name))
 
-                    # 先执行场景进入赋值，再处理选择和跳转。
+                    # 执行preevals。
                     for expression, value in scene.get("preevals", []):
                         execute(f"{expression} = {json.dumps(value)};")
 
                     # 选择块：筛选可用选项，等待用户选择。
                     if "selects" in scene:
-                        logger.debug('模式：select')
+                        logger.info('当前状态机模式：select')
                         choices_by_id = {
                             int(choice["selidx"]): choice
                             for choice in scene["selects"]
@@ -165,9 +160,9 @@ class DracuHandler(BaseHandler):
                             else:
                                 available_choices[str(choice_id)] = choice
                                 logger.info('(%s) 第%s个选项：', choice_id, choice_id)
-                            logger.info('\t[日文]%s', choice["text"])
-                            for language_name, translation in zip(("英文", "简中", "繁中"), choice["language"][1:]):
-                                logger.info('\t[%s]%s', language_name, translation["text"])
+                            logger.info('\t[%s]%s', transcript.supported_languages[0].upper(), choice["text"])
+                            for language, translation in zip(transcript.supported_languages[1:], choice["language"][1:]):
+                                logger.info('\t[%s]%s', language.upper(), translation["text"])
                             for field, value in choice.items():
                                 if field not in {"selidx", "text", "language"}:
                                     logger.debug("\t%s: %s", field, value)
@@ -175,14 +170,13 @@ class DracuHandler(BaseHandler):
                             raise RuntimeError("当前场景没有可用选项")
                         selected_choice_id = None
                         while selected_choice_id not in available_choices:
-                            selected_choice_id = input("输入选项序号，按回车键确定：")
+                            selected_choice_id = logged_input(logger, "输入选项序号（括号内数字），按回车键确定：")
                         selected_transition = available_choices[selected_choice_id]
 
                     # 自动跳转块：先收集正文，再选择下一位置。
                     elif "nexts" in scene:
                         if "texts" in scene:
-                            # 原样保存全部语言；别名补全交给 exporter。
-                            logger.debug('模式：text')
+                            logger.info('当前状态机模式：text')
                             for text in scene["texts"]:
                                 speaker_name = text[0]
                                 dialogue_by_language = text[1]
@@ -199,13 +193,13 @@ class DracuHandler(BaseHandler):
                                 ))
                                 if not config.skip_text:
                                     logger.info("原始说话人：%s", speaker_name)
-                                    for language_name, dialogue in zip(("日文", "英文", "简中", "繁中"), dialogue_by_language):
+                                    for language, dialogue in zip(transcript.supported_languages, dialogue_by_language):
                                         speaker_alias, dialogue_text = dialogue[:2]
-                                        logger.info("[%s]%s: %s", language_name, speaker_alias, dialogue_text)
+                                        logger.info("[%s]%s: %s", language.upper(), speaker_alias, dialogue_text)
                                     if not config.skip_confirm:
-                                        input("按回车键继续：")
+                                        logged_input(logger, "按回车键继续：")
                         else:
-                            logger.debug('模式：next')
+                            logger.info('当前状态机模式：next')
 
                         # 整理候选：过滤 type == 1，并按跳转签名去重。
                         transitions_by_signature = {}
@@ -232,7 +226,7 @@ class DracuHandler(BaseHandler):
                                     break
                                 continue
 
-                            # 两个版本同时存在时，根据成人开关保留对应版本。
+                            # 同时存在R18版和全年龄版跳转时，根据成人开关保留对应版本。
                             transition_storage = transition["storage"]
                             if config.adult_enabled:
                                 counterpart_storage = "x_" + transition_storage
@@ -256,10 +250,10 @@ class DracuHandler(BaseHandler):
                         if selected_transition is None:
                             selected_transition = default_transition
                             if selected_transition is None:
-                                logger.info("没有可用的下一场景，线路结束")
+                                logger.info("没有可用的下一场景，线路结束\n")
                                 current_storage = None
                                 break
-                            logger.info("无条件判断：")
+                            logger.info("不存在可用的条件跳转，使用缺省跳转...")
 
                     else:
                         raise RuntimeError("?")
@@ -275,11 +269,14 @@ class DracuHandler(BaseHandler):
                     if next_storage.strip() == "":
                         logger.info('storage为空，回退至当前scenes：%s', current_storage)
                         next_storage = current_storage
-                    logger.info("下一场景：%s / %s", next_storage, next_label)
+                    logger.info("准备进入下一个场景：%s / %s\n", next_storage, next_label)
                     if next_storage != current_storage:
-                        logger.info("storage发生变化，准备读取下一个scenes...")
+                        logger.info("storage发生变化，准备读取下一个场景文件...")
                         current_storage = next_storage
                         break
+
+                # 当前文件流程结束后，将完整章节加入剧本记录。
+                transcript.chapters.append(chapter)
 
         # 返回剧情对象供导出复用。
         return transcript

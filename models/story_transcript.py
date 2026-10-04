@@ -21,10 +21,5 @@ class Chapter:
 
 @dataclass
 class StoryTranscript:
-    supported_languages: list[str]
+    supported_languages: list[str] = field(default_factory=lambda: ["jp"])
     chapters: list[Chapter] = field(default_factory=list)
-
-    def add_chapter(self, storage: str) -> Chapter:
-        chapter = Chapter(storage=storage)
-        self.chapters.append(chapter)
-        return chapter

@@ -1,3 +1,13 @@
+import logging
+
+
+def logged_input(logger: logging.Logger, prompt: str) -> str:
+    logger.info("%s", prompt)
+    value = input()
+    logger.info("用户输入：%s", value)
+    return value
+
+
 language_map = {
     0: "jp",
     1: "en",

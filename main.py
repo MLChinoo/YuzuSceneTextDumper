@@ -1,22 +1,38 @@
+import logging
+from pathlib import Path
+
 from handlers import Handlers, HandlerMeta
 from exporters import Exporters
+from utils import logged_input
+
+
+logger = logging.getLogger(__name__)
+
 
 if __name__ == "__main__":
-    print("\n选择游戏：")
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    logger.info("选择游戏：")
     handler_names = list(Handlers.keys())
 
     for index, name in enumerate(handler_names):
         desc = Handlers[name].description
-        print(f"\t【{index}】{name} - {desc}")
+        logger.info("\t【%s】%s - %s", index, name, desc)
 
     selected_id = None
     while selected_id not in (str(i) for i in range(len(handler_names))):
-        selected_id = input("请输入编号：")
+        selected_id = logged_input(logger, "请输入编号：")
 
     selected_name = handler_names[int(selected_id)]
 
-    root_dir = input("存放反编译后的.ks.json文件夹路径: ")
-    scnchartdata_filepath = input("scnchartdata.tjs文件路径: ")
+    root_dir = Path(logged_input(logger, "存放反编译后的.ks.json文件夹路径: ").removeprefix('"').removesuffix('"'))
+    scnchartdata_filepath = Path(logged_input(logger, "scnchartdata.tjs文件路径: ").removeprefix('"').removesuffix('"'))
+
+    root_dir = Path(r"C:\Users\MLChinoo\Desktop\yuzu_scns\dracu_steam")
+    scnchartdata_filepath = Path(r"C:\Users\MLChinoo\Desktop\yuzu_scns\x_scnchartdata.tjs")
 
     handler: HandlerMeta = Handlers[selected_name]
     handler_config = handler.build_config(
@@ -32,4 +48,3 @@ if __name__ == "__main__":
         # Exporters["pdf"].clazz().export(
         #     transcript, "output/output.pdf", language="cn",
         # )
-

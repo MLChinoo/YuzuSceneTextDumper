@@ -1,4 +1,5 @@
 from abc import abstractmethod
+from pathlib import Path
 from typing import final, Any
 
 from pydantic import BaseModel, Field
@@ -6,9 +7,9 @@ from pydantic import BaseModel, Field
 
 class BaseConfig(BaseModel):
     # 所有Handler共用配置
-    root_dir: str = Field(..., description="存放所有dump后的场景json的目录路径")
+    root_dir: Path = Field(..., description="存放所有dump后的场景json的目录路径")
 
-    scnchartdata_filepath: str = Field(..., description="scnchartdata.tjs文件路径，用于分支跳转")
+    scnchartdata_filepath: Path = Field(..., description="scnchartdata.tjs文件路径，用于分支跳转")
 
     skip_flags: bool = Field(True, description="跳过显示所有flag加点")
 
@@ -23,7 +24,7 @@ class BaseConfig(BaseModel):
 
     output_pdf_filepath: str = Field("output/output.pdf", description="输出pdf文件路径")
 
-    def __init__(self, root_dir: str, scnchartdata_filepath: str, **data: Any):
+    def __init__(self, root_dir: Path, scnchartdata_filepath: Path, **data: Any):
         data["root_dir"] = root_dir
         data["scnchartdata_filepath"] = scnchartdata_filepath
         super().__init__(**data)
