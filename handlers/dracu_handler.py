@@ -8,7 +8,6 @@ from py_mini_racer import MiniRacer
 from configs.dracu_config import DracuConfig
 from handlers import BaseHandler, registry
 from models.story_transcript import DialogueEntry, DialogueTranslation, StoryTranscript
-from utils import language_map
 
 
 logger = logging.getLogger(__name__)
@@ -17,18 +16,30 @@ logger = logging.getLogger(__name__)
 @registry(name="dracu", description="Dracu-Riot! Steam版", config_class=DracuConfig)
 class DracuHandler(BaseHandler):
     def _handle(self, config: DracuConfig) -> StoryTranscript:
+        def execute(expression):
+            try:
+                return ctx.eval(expression)
+            except Exception as exc:
+                logger.exception("执行脚本失败：%s / %s：%s", current_storage, next_label, expression)
+                raise RuntimeError(
+                    f"执行脚本失败：{current_storage} / {next_label}：{expression}"
+                ) from exc
+
+        # 初始化日志和本次剧情记录。
         logging.basicConfig(
-            level=logging.INFO,
+            level=logging.DEBUG,
             format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         )
         transcript = StoryTranscript(supported_languages=["jp"])
-        supported_languages = {"jp"}
         with MiniRacer() as ctx:
+            # 加载角色加点规则，供后续分支计算使用。
             with open(config.scnchartdata_filepath, mode="r", encoding="UTF-16") as file:
                 scnchartdata_json = json.loads(utils.parser.scnchartdata_tjs_to_json(file.read()))
                 flag_names = scnchartdata_json["flagkeys"]
                 assert flag_names == list(scnchartdata_json["flags"].keys())
                 ctx.eval(f"var flags = {json.dumps(scnchartdata_json["flags"])};")
+
+            # 将体验版和成人选项开关注入脚本运行时。
             runtime_options = {
                 "IsTrial": config.is_trial,
                 "checkIN": config.adult_enabled and config.check_in,
@@ -37,6 +48,8 @@ class DracuHandler(BaseHandler):
                 "checkFACE": config.adult_enabled and config.check_face,
             }
             ctx.eval(f"Object.assign(this, {json.dumps(runtime_options)});")
+
+            # 定义分支计算函数，并初始化脚本状态。
             ctx.eval(r"""
             var f = {sf: {}};
             function initialize() {
@@ -79,6 +92,8 @@ class DracuHandler(BaseHandler):
             initialize();
             finalize();
             """)
+
+            # DR独有：初始化各角色线路的通关状态。
             clear_flags = {
                 "clear_miu": config.clear_miu,
                 "clear_azu": config.clear_azu,
@@ -88,20 +103,13 @@ class DracuHandler(BaseHandler):
             }
             ctx.eval(f"Object.assign(f.sf, {json.dumps(clear_flags)});")
 
+            # 设置流程起点。
             next_storage = config.head_scn
             next_label = config.head_label
 
             current_storage = config.head_scn
 
-            def execute_script(expression):
-                try:
-                    return ctx.eval(expression)
-                except Exception as exc:
-                    logger.exception("执行脚本失败：%s / %s：%s", current_storage, next_label, expression)
-                    raise RuntimeError(
-                        f"执行脚本失败：{current_storage} / {next_label}：{expression}"
-                    ) from exc
-
+            # 文件循环：加载脚本、创建章节并建立标签索引。
             while current_storage:
                 if current_storage == "start.ks":
                     logger.info("到达线路结尾，线路结束")
@@ -109,6 +117,9 @@ class DracuHandler(BaseHandler):
                 logger.info('准备读取scenes：%s ...', current_storage)
                 with open(os.path.join(config.root_dir, f"{current_storage}.json"), mode="r", encoding="UTF-8") as file:
                     script_data = json.load(file)
+                # 仅从初始脚本读取语言声明，保留原始语言代码。
+                if not transcript.chapters:
+                    transcript.supported_languages.extend(script_data.get("languages", []))
                 logger.info("读取场景文件成功：%s", script_data["name"])
                 chapter = transcript.add_chapter(current_storage)
                 assert next_storage == script_data["name"]
@@ -116,6 +127,8 @@ class DracuHandler(BaseHandler):
                     scene["label"]: scene
                     for scene in script_data["scenes"]
                 }
+
+                # 场景循环：按标签推进，未指定标签时进入最早场景。
                 while True:
                     if next_label is None:
                         first_scene = min(
@@ -133,10 +146,12 @@ class DracuHandler(BaseHandler):
                         for flag_name in flag_names:
                             logger.info('\t%s: %s', flag_name, ctx.eval(flag_name))
 
+                    # 先执行场景进入赋值，再处理选择和跳转。
                     for expression, value in scene.get("preevals", []):
-                        execute_script(f"{expression} = {json.dumps(value)};")
+                        execute(f"{expression} = {json.dumps(value)};")
 
-                    if "selects" in scene:  # 当前scene含有选择块
+                    # 选择块：筛选可用选项，等待用户选择。
+                    if "selects" in scene:
                         logger.debug('模式：select')
                         choices_by_id = {
                             int(choice["selidx"]): choice
@@ -163,8 +178,10 @@ class DracuHandler(BaseHandler):
                             selected_choice_id = input("输入选项序号，按回车键确定：")
                         selected_transition = available_choices[selected_choice_id]
 
-                    elif "nexts" in scene:  # 当前scene含有文本块
+                    # 自动跳转块：先收集正文，再选择下一位置。
+                    elif "nexts" in scene:
                         if "texts" in scene:
+                            # 原样保存全部语言；别名补全交给 exporter。
                             logger.debug('模式：text')
                             for text in scene["texts"]:
                                 speaker_name = text[0]
@@ -174,13 +191,12 @@ class DracuHandler(BaseHandler):
                                         speaker_alias=dialogue[0],
                                         text=dialogue[1],
                                     )
-                                    for language, dialogue in zip(language_map.values(), dialogue_by_language)
+                                    for language, dialogue in zip(transcript.supported_languages, dialogue_by_language)
                                 }
                                 chapter.entries.append(DialogueEntry(
                                     original_speaker=speaker_name,
                                     translations=translations,
                                 ))
-                                supported_languages.update(translations)
                                 if not config.skip_text:
                                     logger.info("原始说话人：%s", speaker_name)
                                     for language_name, dialogue in zip(("日文", "英文", "简中", "繁中"), dialogue_by_language):
@@ -191,6 +207,7 @@ class DracuHandler(BaseHandler):
                         else:
                             logger.debug('模式：next')
 
+                        # 整理候选：过滤 type == 1，并按跳转签名去重。
                         transitions_by_signature = {}
                         for transition in scene["nexts"]:
                             if transition.get("type") == 1:
@@ -203,6 +220,7 @@ class DracuHandler(BaseHandler):
                             )
                             transitions_by_signature[signature] = transition
 
+                        # 首个成立的条件优先，无条件项作为默认跳转。
                         selected_transition = None
                         default_transition = None
                         for transition in transitions_by_signature.values():
@@ -234,6 +252,7 @@ class DracuHandler(BaseHandler):
                             if default_transition is None:
                                 default_transition = transition
 
+                        # 条件均不成立时使用默认项；没有默认项则结束。
                         if selected_transition is None:
                             selected_transition = default_transition
                             if selected_transition is None:
@@ -245,8 +264,9 @@ class DracuHandler(BaseHandler):
                     else:
                         raise RuntimeError("?")
 
+                    # 执行选中项的 exp，再更新位置或切换文件。
                     if selected_transition.get("exp"):
-                        result = execute_script(selected_transition["exp"])
+                        result = execute(selected_transition["exp"])
                         logger.debug('执行exp成功，返回值：%s', result)
                     next_storage = selected_transition["storage"]
                     next_label = selected_transition.get("target")
@@ -260,8 +280,6 @@ class DracuHandler(BaseHandler):
                         logger.info("storage发生变化，准备读取下一个scenes...")
                         current_storage = next_storage
                         break
-        transcript.supported_languages = [
-            language for language in language_map.values()
-            if language in supported_languages
-        ]
+
+        # 返回剧情对象供导出复用。
         return transcript

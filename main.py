@@ -15,8 +15,8 @@ if __name__ == "__main__":
 
     selected_name = handler_names[int(selected_id)]
 
-    root_dir = input("root_dir: ")
-    scnchartdata_filepath = input("scnchartdata_filepath: ")
+    root_dir = input("存放反编译后的.ks.json文件夹路径: ")
+    scnchartdata_filepath = input("scnchartdata.tjs文件路径: ")
 
     handler: HandlerMeta = Handlers[selected_name]
     handler_config = handler.build_config(
@@ -26,10 +26,10 @@ if __name__ == "__main__":
     transcript = handler.clazz().handle(handler_config)
     if transcript is not None:
         Exporters["txt"].clazz().export(
-            transcript, "output/output.txt", language="sc",
+            transcript, "output/output.txt", language="cn",
         )
         # 按需启用 PDF 导出：
         # Exporters["pdf"].clazz().export(
-        #     transcript, "output/output.pdf", language="sc",
+        #     transcript, "output/output.pdf", language="cn",
         # )
 

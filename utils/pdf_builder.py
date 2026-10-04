@@ -1,7 +1,7 @@
 """
 Usage:
     from pdf_builder import build_pdf
-    build_pdf(raw_text, language="tc", outfile="output.pdf")
+    build_pdf(raw_text, language="tw", outfile="output.pdf")
 """
 import re
 from pathlib import Path
@@ -22,11 +22,11 @@ FONT_FILES = {
         "regular":  "fonts/SourceSerif4-Regular.ttf",
         "semibold": "fonts/SourceSerif4-Semibold.ttf",
     },
-    "sc": {
+    "cn": {
         "regular":  "fonts/SourceHanSerifCN-Regular.ttf",
         "semibold": "fonts/SourceHanSerifCN-SemiBold.ttf",
     },
-    "tc": {
+    "tw": {
         "regular":  "fonts/SourceHanSerifTW-Regular.ttf",
         "semibold": "fonts/SourceHanSerifTW-SemiBold.ttf",
     },
@@ -170,8 +170,8 @@ if __name__ == "__main__":
 【第2章】开始
 ……………………"""
     Path("output").mkdir(exist_ok=True)
-    build_pdf(SAMPLE_TEXT, language="tc", outfile="output/sample_tc.pdf")
+    build_pdf(SAMPLE_TEXT, language="tw", outfile="output/sample_tw.pdf")
     build_pdf(SAMPLE_TEXT, language="en", outfile="output/sample_en.pdf")
-    build_pdf(SAMPLE_TEXT, language="sc", outfile="output/sample_sc.pdf")
+    build_pdf(SAMPLE_TEXT, language="cn", outfile="output/sample_cn.pdf")
     build_pdf(SAMPLE_TEXT, language="jp", outfile="output/sample_jp.pdf")
 
