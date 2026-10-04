@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 import utils.parser
 
 from py_mini_racer import MiniRacer
@@ -25,8 +26,19 @@ class DracuHandler(BaseHandler):
                     f"执行脚本失败：{current_storage} / {next_label}：{expression}"
                 ) from exc
 
+        def resolve_text(text):
+            def replace_expression(match):
+                expression = match[1]
+                # TJS 的 $数字 是字符字面量，例如 $38 表示 &。
+                if re.fullmatch(r"\$\d+", expression):
+                    return chr(int(expression[1:]))
+                return execute(f"String(({expression}))")
+
+            return re.sub(r"\$\{([^{}]+)\}", replace_expression, text)
+
         # 初始化本次剧本记录。
         transcript = StoryTranscript()
+        dialogue_text_index = config.dialogue_text_variant.value
         with MiniRacer() as ctx:
             # 加载角色加点规则，供后续分支计算使用。
             with config.scnchartdata_filepath.open(mode="r", encoding="UTF-16") as file:
@@ -44,6 +56,18 @@ class DracuHandler(BaseHandler):
                 "checkFACE": config.adult_enabled and config.check_face,
             }
             ctx.eval(f"Object.assign(this, {json.dumps(runtime_options)});")
+
+            # 文本中的取词表达式使用配置词表和当前 f.dick 状态。
+            ctx.eval(f"""
+            function _get_dick_word(type, lang) {{
+                var flag = f.dick;
+                if (flag >= 8) flag >>= 3;
+                var idx = (flag >= 4) ? 2 : (flag >= 2) ? 1 : 0;
+                return ({json.dumps(config.dick_word_table)})[lang][type][idx];
+            }}
+            """)
+
+            ctx.eval(f"function checkAdult() {{ return {json.dumps(config.adult_enabled)}; }}")
 
             # 定义分支计算函数，并初始化脚本状态。
             ctx.eval(r"""
@@ -81,9 +105,6 @@ class DracuHandler(BaseHandler):
                 expr = " " + expr;
                 expr = expr.replace(/ \./g, " f.");
                 return !!eval(expr);
-            }
-            function checkAdult() {
-            """ + f"    return {json.dumps(config.adult_enabled)};" + """
             }
             initialize();
             finalize();
@@ -183,7 +204,10 @@ class DracuHandler(BaseHandler):
                                 translations = {
                                     language: DialogueTranslation(
                                         speaker_alias=dialogue[0],
-                                        text=dialogue[1],
+                                        text=resolve_text(
+                                            dialogue[dialogue_text_index]
+                                            if len(dialogue) > dialogue_text_index else dialogue[1]
+                                        ),
                                     )
                                     for language, dialogue in zip(transcript.supported_languages, dialogue_by_language)
                                 }
@@ -193,9 +217,8 @@ class DracuHandler(BaseHandler):
                                 ))
                                 if not config.skip_text:
                                     logger.info("原始说话人：%s", speaker_name)
-                                    for language, dialogue in zip(transcript.supported_languages, dialogue_by_language):
-                                        speaker_alias, dialogue_text = dialogue[:2]
-                                        logger.info("[%s]%s: %s", language.upper(), speaker_alias, dialogue_text)
+                                    for language, translation in translations.items():
+                                        logger.info("[%s]%s: %s", language.upper(), translation.speaker_alias, translation.text)
                                     if not config.skip_confirm:
                                         logged_input(logger, "按回车键继续：")
                         else:
