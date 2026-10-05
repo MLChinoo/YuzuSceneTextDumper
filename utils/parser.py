@@ -1,70 +1,59 @@
-import json
-import re
+from pathlib import Path
 
-def scnchartdata_tjs_to_json(src: str) -> str:
-    src_no_comment = re.sub(r'//.*', '', src)
-
-    tmp = (src_no_comment
-           .replace('(const) %[', '{')
-           .replace('(const) [', '[')
-           .replace('=>', ':'))
-
-    out = []
-    stack = []
-
-    i = 0
-    in_str = False
-
-    while i < len(tmp):
-        ch = tmp[i]
-
-        if ch == '"':
-            in_str = not in_str
-            out.append(ch)
-            i += 1
-            continue
-
-        if not in_str and tmp.startswith('void', i):
-            before = tmp[i - 1] if i > 0 else ' '
-            after = tmp[i + 4] if i + 4 < len(tmp) else ' '
-            if not before.isalnum() and not after.isalnum() and after != '_':
-                out.append('null')
-                i += 4
-                continue
-
-        if ch == '{':
-            stack.append('object')
-            out.append('{')
-            i += 1
-
-        elif ch == '[':
-            stack.append('array')
-            out.append('[')
-            i += 1
-
-        elif ch == ']':
-            if not stack:
-                raise ValueError('Unmatched ] at pos %d' % i)
-            t = stack.pop()
-            out.append('}' if t == 'object' else ']')
-            i += 1
-
-        else:
-            out.append(ch)
-            i += 1
-
-    if stack:
-        raise ValueError('Unclosed bracket(s): %s' % stack)
-
-    json_text = ''.join(out)
-    return json_text
+from pythonnet import load
 
 
-if __name__ == "__main__":
-    with open(r"C:\Users\MLChinoo\Desktop\senren_dumps\data\main\scnchartdata.tjs", mode="r", encoding="UTF-16") as file:
-        raw = file.read()
-    converted = scnchartdata_tjs_to_json(raw)
-    # print(converted)
-    test = json.loads(converted)
-    pass
-    print(f"var flags = {json.dumps(test["flags"])};")
+BINARIES_DIR = Path(__file__).resolve().parents[1] / "binaries"
+
+# 必须在 import clr 前选择运行时；提供的 TjsParser.dll 面向 .NET 8。
+load("coreclr", runtime_config=str(BINARIES_DIR / "TjsParser.runtimeconfig.json"))
+
+import clr
+
+clr.AddReference(str(BINARIES_DIR / "TjsParser.dll"))
+
+from TjsParser import Parser
+from TjsParser.Parsing import ParseOptions, RootMode
+from TjsParser.Syntax import SyntaxKind
+
+
+def _read_integer(node):
+    if node.Kind == SyntaxKind.UnaryExpression and node.Operator in ("+", "-"):
+        value = int(node.Operand.Value)
+        return value if node.Operator == "+" else -value
+    return int(node.Value)
+
+
+def load_branch_flags(filepath: str | Path) -> dict[str, list[list[str | int]]]:
+    """直接从计分表 AST 提取完整 flags，不还原其他字段。"""
+    options = ParseOptions()
+    options.RootMode = RootMode.Expression
+    result = Parser.ParseFile(str(Path(filepath).resolve()), options)
+    if not result.Success:
+        diagnostics = "\n".join(
+            f"{item.Code}（{item.Span.Start.Line}:{item.Span.Start.Column}）：{item.Message}"
+            for item in result.Diagnostics
+        )
+        raise ValueError(f"解析计分表失败：{filepath}\n{diagnostics}")
+
+    flags_node = None
+    for entry in result.Document.Expression.Entries:
+        if str(entry.Key.Value) == "flags":
+            flags_node = entry.Value
+    if flags_node is None:
+        raise KeyError("flags")
+
+    flags = {}
+    for entry in flags_node.Entries:
+        rules = []
+        for element in entry.Value.Elements:
+            selection, selected_id, bonus = (
+                item.Expression for item in element.Expression.Elements
+            )
+            rules.append([
+                str(selection.Value),
+                _read_integer(selected_id),
+                _read_integer(bonus),
+            ])
+        flags[str(entry.Key.Value)] = rules
+    return flags

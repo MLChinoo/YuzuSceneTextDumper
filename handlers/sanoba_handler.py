@@ -14,11 +14,9 @@ from utils import language_map
 class SanobaHandler(BaseHandler):
     def _handle(self, config: TenshiConfig):
         ctx = MiniRacer()
-        with config.scnchartdata_filepath.open(mode="r", encoding="UTF-16") as file:
-            scnchartdata_json = json.loads(utils.parser.scnchartdata_tjs_to_json(file.read()))
-            flagkeys = scnchartdata_json["flagkeys"]
-            assert flagkeys == list(scnchartdata_json["flags"].keys())
-            ctx.eval(f"var flags = {json.dumps(scnchartdata_json["flags"])};")
+        branch_flags = utils.parser.load_branch_flags(config.scnchartdata_filepath)
+        flagkeys = list(branch_flags)
+        ctx.eval(f"var flags = {json.dumps(branch_flags)};")
         ctx.eval(f'this["IsTrial"] = {json.dumps(config.is_trial)};')
         ctx.eval(f'this["checkAnyClear"] = {json.dumps(config.check_any_clear)};')
         ctx.eval(f'this["checkIN"] = {json.dumps(config.adult_enabled and config.check_in)};')

@@ -21,7 +21,6 @@ class DracuHandler(BaseHandler):
             try:
                 return ctx.eval(expression)
             except Exception as exc:
-                logger.exception("执行expression失败：%s / %s：%s", current_storage, next_label, expression)
                 raise RuntimeError(
                     f"执行expression失败：{current_storage} / {next_label}：{expression}"
                 ) from exc
@@ -41,7 +40,6 @@ class DracuHandler(BaseHandler):
                 if re.fullmatch(r"\$\d+", expression):
                     return chr(int(expression[1:]))
                 return execute_expression(f"String(({expression}))")
-
             return re.sub(r"\$\{([^{}]+)\}", replace_expression, text)
 
         # 初始化本次剧本记录。
@@ -49,11 +47,9 @@ class DracuHandler(BaseHandler):
         dialogue_text_index = config.dialogue_text_variant.value
         with MiniRacer() as ctx:
             # 加载角色加点规则，供后续分支计算使用。
-            with config.scnchartdata_filepath.open(mode="r", encoding="UTF-16") as file:
-                scnchartdata_json = json.loads(utils.parser.scnchartdata_tjs_to_json(file.read()))
-                flag_names = scnchartdata_json["flagkeys"]
-                assert flag_names == list(scnchartdata_json["flags"].keys())
-                ctx.eval(f"var flags = {json.dumps(scnchartdata_json["flags"])};")
+            branch_flags = utils.parser.load_branch_flags(config.scnchartdata_filepath)
+            flag_names = list(branch_flags)
+            ctx.eval(f"var flags = {json.dumps(branch_flags)};")
 
             # 将体验版和成人选项开关注入脚本运行时。
             runtime_options = {
@@ -82,20 +78,13 @@ class DracuHandler(BaseHandler):
             var sf = {};
             // f 是全局对象的代理，属性读写和删除共享同一份状态。
             var f = new Proxy(globalThis, {});
-            function initialize() {
-                Object.keys(flags).forEach(key => globalThis[key] = 0);
-            }
             function UpdateBranchFlags() {
-                initialize();
-                for (var character in flags) {
-                    var conditions = flags[character];
-                    for (var i = 0; i < conditions.length; i++) {
-                        var condition = conditions[i];
-                        var selection = condition[0];
-                        var selected_id = condition[1];
-                        var bonus = condition[2];
-                        if (globalThis[selection] === selected_id) {
-                            globalThis[character] += bonus;
+                for (const [flagName, conditions] of Object.entries(flags)) {
+                    // 保留全局字段，避免裸名称访问报错；未命中规则时值仍未定义。
+                    f[flagName] = undefined;
+                    for (const [selection, selectedId, bonus] of conditions) {
+                        if (f[selection] == selectedId) {
+                            f[flagName] = (f[flagName] ?? 0) + bonus;
                         }
                     }
                 }
@@ -106,14 +95,15 @@ class DracuHandler(BaseHandler):
                 UpdateBranchFlags();
             }
             function CheckBranchFlags(expression) {
+                UpdateBranchFlags();
                 // 去掉 TJS 省略对象前缀的前导点，直接访问全局字段。
                 const normalized = expression.replace(
                     /(^|[^\w$.])\.(?=[A-Za-z_$])/g,
                     "$1"
                 );
-                return Boolean(eval(normalized));
+                return eval(normalized);
             }
-            initialize();
+            UpdateBranchFlags();
             """)
 
             # DR独有：初始化各角色线路的通关状态。
@@ -260,23 +250,23 @@ class DracuHandler(BaseHandler):
                                     break
                                 continue
 
-                            # 同时存在R18版和全年龄版跳转时，根据成人开关保留对应版本。
-                            transition_storage = transition["storage"]
-                            if config.adult_enabled:
-                                counterpart_storage = "x_" + transition_storage
-                            elif transition_storage.startswith("x_"):
-                                counterpart_storage = transition_storage.removeprefix("x_")
-                            else:
-                                counterpart_storage = None
-                            if counterpart_storage is not None:
-                                counterpart_signature = (
-                                    transition.get("eval"),
-                                    counterpart_storage,
-                                    transition.get("target"),
-                                    transition.get("type"),
-                                )
-                                if counterpart_signature in transitions_by_signature:
-                                    continue
+                            # 暂停按 x_ 前缀配对筛选，成人版选择交由剧本中的跳转条件处理。
+                            # transition_storage = transition["storage"]
+                            # if config.adult_enabled:
+                            #     counterpart_storage = "x_" + transition_storage
+                            # elif transition_storage.startswith("x_"):
+                            #     counterpart_storage = transition_storage.removeprefix("x_")
+                            # else:
+                            #     counterpart_storage = None
+                            # if counterpart_storage is not None:
+                            #     counterpart_signature = (
+                            #         transition.get("eval"),
+                            #         counterpart_storage,
+                            #         transition.get("target"),
+                            #         transition.get("type"),
+                            #     )
+                            #     if counterpart_signature in transitions_by_signature:
+                            #         continue
                             if default_transition is None:
                                 default_transition = transition
 

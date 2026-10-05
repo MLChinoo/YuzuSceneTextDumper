@@ -31,8 +31,8 @@ if __name__ == "__main__":
     root_dir = Path(logged_input(logger, "存放反编译后的.ks.json文件夹路径: ").removeprefix('"').removesuffix('"'))
     scnchartdata_filepath = Path(logged_input(logger, "scnchartdata.tjs文件路径: ").removeprefix('"').removesuffix('"'))
 
-    # root_dir = Path(r"C:\Users\MLChinoo\Desktop\yuzu_scns\dracu_steam")
-    # scnchartdata_filepath = Path(r"C:\Users\MLChinoo\Desktop\yuzu_scns\x_scnchartdata.tjs")
+    root_dir = Path(r"C:\Users\MLChinoo\Desktop\yuzu_scns\dracu_steam")
+    scnchartdata_filepath = Path(r"C:\Users\MLChinoo\Desktop\yuzu_scns\x_scnchartdata.tjs")
 
     handler: HandlerMeta = Handlers[selected_name]
     handler_config = handler.build_config(
